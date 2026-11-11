@@ -1,0 +1,11 @@
+<Bindings>
+	<Binding name="EASYLFG_TOGGLE" header="EASYLFG" category="ADDONS">
+		EasyLFG_Toggle()
+	</Binding>
+	<Binding name="EASYLFG_INVITE_NEXT" category="ADDONS">
+		EasyLFG_InviteNext()
+	</Binding>
+	<Binding name="EASYLFG_SEARCH" category="ADDONS">
+		EasyLFG_Search()
+	</Binding>
+</Bindings>
