@@ -149,34 +149,52 @@ function Finder.GroupUnits()
 	return units
 end
 
--- A member's role: the one EasyLFG invited them for, the one the game assigned, or DPS as a guess.
-local function memberRole(name, unit)
-	if name then
-		local roles = ns.db.memberRoles
-		local record = roles[ns.MakeKey(name) or ""]
-		if not record then
-			for key, other in pairs(roles) do
-				if ns.SameName(key, name) then
-					record = other
-					break
-				end
-			end
-		end
-		if record and ns.ROLE_LABEL[record.role] then
-			return record.role, true
+-- What EasyLFG knows about a member: { role = invited for, chosen = picked in a role check }.
+function Finder.MemberRecord(name)
+	if not name then
+		return nil, nil
+	end
+	local roles = ns.db.memberRoles
+	local key = ns.MakeKey(name) or ""
+	if roles[key] then
+		return roles[key], key
+	end
+	for otherKey, record in pairs(roles) do
+		if ns.SameName(otherKey, name) then
+			return record, otherKey
 		end
 	end
-	if UnitGroupRolesAssigned then
-		local assigned = ns.Readable(UnitGroupRolesAssigned(unit))
-		if ns.ROLE_LABEL[assigned] then
-			return assigned, true
-		end
+	return nil, nil
+end
+
+-- The role the game shows for a unit after a role check, or nil.
+function Finder.AssignedRole(unit)
+	if not UnitGroupRolesAssigned then
+		return nil
+	end
+	local assigned = ns.Readable(UnitGroupRolesAssigned(unit))
+	return ns.ROLE_LABEL[assigned] and assigned or nil
+end
+
+-- A member's role, most reliable first: what they picked in a role check (as the game shows it,
+-- or as EasyLFG heard it), then what EasyLFG invited them for, then DPS as a guess.
+local function memberRole(name, unit)
+	local assigned = Finder.AssignedRole(unit)
+	if assigned then
+		return assigned, true
+	end
+	local record = Finder.MemberRecord(name)
+	if record and ns.ROLE_LABEL[record.chosen] then
+		return record.chosen, true
+	end
+	if record and ns.ROLE_LABEL[record.role] then
+		return record.role, true
 	end
 	return "DAMAGER", false
 end
 
--- Who is in the group, what is still missing, and which classes are taken. The invite in flight
--- counts as if it were accepted, so nobody is invited for the same seat twice.
+-- Who is in the group, what is still missing, and which classes are taken. Invites in flight
+-- count as if they were accepted, so nobody is invited for the same seat twice.
 function Finder.GroupState()
 	local s = ns.settings
 	local state = {
@@ -187,6 +205,11 @@ function Finder.GroupState()
 		size = 1,
 		unknownRoles = 0,
 	}
+	-- In a group, your own answer to a role check wins over the "I am" setting, and updates it.
+	local myAssigned = ns.Readable(IsInGroup()) and Finder.AssignedRole("player")
+	if myAssigned and myAssigned ~= s.myRole then
+		s.myRole = myAssigned
+	end
 	local myRole = ns.ROLE_LABEL[s.myRole] and s.myRole or "DAMAGER"
 	state.filled[myRole] = state.filled[myRole] + 1
 	local myClass = ns.Readable((select(2, UnitClass("player"))))
@@ -209,13 +232,26 @@ function Finder.GroupState()
 		state.members[#state.members + 1] = { name = name, class = class, role = role, known = known }
 	end
 
-	local pending = ns.Inviter and ns.Inviter.pending
-	if pending then
-		state.pending = pending
+	-- Joined, but not in the roster yet: their seat is taken all the same.
+	if ns.Inviter then
+		for _, seat in ipairs(ns.Inviter.HeldSeats()) do
+			if not Finder.InGroup(seat.name, state) then
+				state.size = state.size + 1
+				state.filled[seat.role] = state.filled[seat.role] + 1
+				if seat.class then
+					state.classes[seat.class] = true
+				end
+				state.members[#state.members + 1] = { name = seat.name, class = seat.class, role = seat.role, known = true }
+			end
+		end
+	end
+
+	state.pending = ns.Inviter and ns.Inviter.pending or {}
+	for role, invite in pairs(state.pending) do
 		state.size = state.size + 1
-		state.filled[pending.role] = state.filled[pending.role] + 1
-		if pending.class then
-			state.classes[pending.class] = true
+		state.filled[role] = state.filled[role] + 1
+		if invite.class then
+			state.classes[invite.class] = true
 		end
 	end
 
@@ -315,20 +351,23 @@ function Finder.ReadResult(resultID)
 	return c
 end
 
--- What EasyLFG remembers about asking this player, if it still counts.
+-- What EasyLFG remembers about asking this player this session, if it keeps them from a new invite.
 function Finder.AskedRecord(key)
-	local record = key and ns.db.asked[key]
-	if type(record) ~= "table" or record.outcome == "joined" then
-		return nil
-	end
-	local pending = ns.Inviter and ns.Inviter.pending
-	if record.outcome == "invited" and pending and pending.key == key then
-		return nil
-	end
-	if time() - (record.time or 0) > (ns.settings.forgetMinutes or 30) * 60 then
+	local record = key and ns.asked[key]
+	if type(record) ~= "table" or record.outcome == "joined" or record.outcome == "invited" then
 		return nil
 	end
 	return record
+end
+
+-- The invite in flight for this player, if any.
+function Finder.PendingInvite(name, state)
+	for _, invite in pairs(state.pending) do
+		if ns.SameName(invite.name, name) then
+			return invite
+		end
+	end
+	return nil
 end
 
 local function askedText(record)
@@ -344,13 +383,15 @@ end
 function Finder.Judge(c, state)
 	local s = ns.settings
 	c.role, c.reason, c.status, c.guessedRole = nil, nil, nil, nil
+	c.fits = {}
 	if not c.readable then
 		c.status, c.reason = "hidden", "details hidden by the game"
 		return
 	end
-	local pending = state.pending
-	if pending and ns.SameName(pending.name, c.name) then
-		c.status, c.reason, c.role = "invited", "invited, waiting for an answer", pending.role
+	local invite = Finder.PendingInvite(c.name, state)
+	if invite then
+		c.status, c.role = "invited", invite.role
+		c.reason = ("invited as %s, waiting for an answer"):format(ns.ROLE_LABEL[invite.role])
 		return
 	end
 	if Finder.InGroup(c.name, state) then
@@ -397,17 +438,26 @@ function Finder.Judge(c, state)
 				text = ("%s already in the group"):format(ns.ClassName(c.class))
 			end
 			if not text then
-				c.role, c.status = role, "match"
-				c.reason = ("fits as %s"):format(label) .. (c.guessedRole and " (no role listed)" or "")
-				return
-			end
+				c.fits[role] = true
+				c.role = c.role or role
 			-- A real mismatch says more than a seat that is already taken.
-			if not problem or (problemIsFullSlot and not fullSlot) then
+			elseif not problem or (problemIsFullSlot and not fullSlot) then
 				problem, problemIsFullSlot = text, fullSlot
 			end
 		end
 	end
-	c.status, c.reason = "nofit", problem or "does not fit"
+	if c.role then
+		local labels = {}
+		for _, role in ipairs(ns.ROLES) do
+			if c.fits[role] then
+				labels[#labels + 1] = ns.ROLE_LABEL[role]
+			end
+		end
+		c.status = "match"
+		c.reason = ("fits as %s"):format(table.concat(labels, " or ")) .. (c.guessedRole and " (no role listed)" or "")
+	else
+		c.status, c.reason = "nofit", problem or "does not fit"
+	end
 end
 
 local ROLE_INDEX = { TANK = 1, HEALER = 2, DAMAGER = 3 }
@@ -484,15 +534,18 @@ function Finder.Scan()
 	return Finder.Evaluate()
 end
 
--- The best candidate right now, or nil.
-function Finder.Next()
+-- The best candidate for one role right now, or nil: highest level, then longest listed.
+function Finder.BestFor(role)
 	Finder.Evaluate()
+	local best
 	for _, c in ipairs(Finder.candidates) do
-		if c.status == "match" then
-			return c
+		if c.status == "match" and c.fits[role] then
+			if not best or c.level > best.level or (c.level == best.level and c.age > best.age) then
+				best = c
+			end
 		end
 	end
-	return nil
+	return best
 end
 
 function Finder.FindCandidate(name)
@@ -506,15 +559,46 @@ end
 
 -- Searching ----------------------------------------------------------------------------------
 
--- Asks the server for the listings of the chosen dungeon. The game only allows this from a click
--- or a key press, so it is only called from the window, a key binding or a typed command.
-function Finder.Search()
+-- The list is refreshed after every batch of invites and, in auto mode, every AUTO_REFRESH seconds
+-- while a role is open. A search from a click or key press is always allowed. One that is not (auto
+-- mode runs on events) may be refused by the game: then EasyLFG stops trying for the session and
+-- asks for a click instead. A refusal shows up as ADDON_ACTION_BLOCKED or as a search that never
+-- answers.
+Finder.MIN_SEARCH_GAP = 5 -- seconds between two searches EasyLFG starts itself
+Finder.AUTO_REFRESH = 10 -- seconds between refreshes in auto mode while a role is open
+local SEARCH_WATCHDOG = 10 -- a search without an answer after this long counts as failed
+local SILENT_FAILS_TO_GIVE_UP = 2
+
+Finder.searchNeedsClick = false -- set once the game refused a search that was not from a click
+Finder.searchFromClick = true -- what started the search in flight
+Finder.silentFails = 0
+Finder.autoSearches = 0
+local searchToken = 0
+local refreshQueued = false
+
+-- The game refused a search that was not from a click: from now on only clicks search.
+function Finder.SearchRefused(why)
+	Finder.searching = false
+	if not Finder.searchNeedsClick then
+		Finder.searchNeedsClick = true
+		Finder.lastSearchError = why
+		ns.Print("The game only allows a Group Finder search from a click here. Press |cffffd100Search|r (or its key binding) to refresh the list.")
+	end
+	ns.SetStatus("Press Search for a fresh list: the game refused an automatic search.")
+end
+
+-- Asks the server for the listings of the chosen dungeon, and nothing else. `auto` is true when
+-- the call does not come from a click or key press.
+function Finder.Search(auto)
 	local s = ns.settings
 	if not s.activityID then
 		return false, "Pick a dungeon first."
 	end
 	if not C_LFGList or not C_LFGList.Search then
 		return false, "This client has no Group Finder search."
+	end
+	if auto and Finder.searchNeedsClick then
+		return false, "Press Search for a fresh list."
 	end
 	local categoryID = s.categoryID
 	if not categoryID then
@@ -532,8 +616,52 @@ function Finder.Search()
 		return false, "The search failed: " .. tostring(err)
 	end
 	Finder.searching = true
+	Finder.searchFromClick = not auto
 	Finder.lastSearchError = nil
+	if auto then
+		Finder.autoSearches = Finder.autoSearches + 1
+	end
+	searchToken = searchToken + 1
+	local token = searchToken
+	C_Timer.After(SEARCH_WATCHDOG, ns.Guard("search watchdog", function()
+		if token ~= searchToken or not Finder.searching then
+			return
+		end
+		-- No answer at all: the search did not happen.
+		Finder.searching = false
+		if auto then
+			Finder.silentFails = Finder.silentFails + 1
+			if Finder.silentFails >= SILENT_FAILS_TO_GIVE_UP then
+				Finder.SearchRefused("automatic searches get no answer")
+				return
+			end
+		end
+		ns.Refresh()
+	end))
 	return true, ("Searching the Group Finder for %s..."):format(s.activityName or "your dungeon")
+end
+
+-- Refreshes the list unless a search is running or the last one is too recent; a refresh that is
+-- too early waits for the gap. `fromClick` as for InviteRound.
+function Finder.Refresh(fromClick)
+	if not ns.settings.activityID or Finder.searching then
+		return false
+	end
+	if not fromClick and Finder.searchNeedsClick then
+		return false
+	end
+	local since = GetTime() - (Finder.lastSearchAt or -1000)
+	if since < Finder.MIN_SEARCH_GAP then
+		if not refreshQueued then
+			refreshQueued = true
+			C_Timer.After(Finder.MIN_SEARCH_GAP - since, ns.Guard("queued refresh", function()
+				refreshQueued = false
+				Finder.Refresh(false)
+			end))
+		end
+		return false
+	end
+	return Finder.Search(not fromClick)
 end
 
 local rescanQueued = false
@@ -552,6 +680,9 @@ function Finder.QueueScan()
 end
 
 ns.On("LFG_LIST_SEARCH_RESULTS_RECEIVED", "search results", function()
+	if Finder.searching and not Finder.searchFromClick then
+		Finder.silentFails = 0 -- automatic searches work on this client
+	end
 	Finder.searching = false
 	Finder.lastResultsAt = GetTime()
 	Finder.resultEvents = Finder.resultEvents + 1
@@ -565,7 +696,12 @@ end)
 ns.On("LFG_LIST_SEARCH_FAILED", "search failed", function(_, reason)
 	Finder.searching = false
 	Finder.lastSearchError = "search failed" .. (ns.Readable(reason) and (": " .. tostring(reason)) or "")
-	ns.SetStatus("The Group Finder search failed. Try again in a moment.")
+	-- Usually the server asking us to slow down: auto mode tries again on its next refresh.
+	if ns.Inviter and ns.Inviter.auto then
+		ns.SetStatus("The Group Finder search failed; auto mode tries again shortly.")
+	else
+		ns.SetStatus("The Group Finder search failed. Try again in a moment.")
+	end
 end)
 
 ns.On("LFG_LIST_SEARCH_RESULT_UPDATED", "result updated", function()

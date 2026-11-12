@@ -24,7 +24,17 @@ ns.ROLE_FLAG = { TANK = "tank", HEALER = "healer", DAMAGER = "dps" }
 -- The nine classes of the Vanilla world. The retail client knows more, but nobody here plays them.
 ns.CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
-ns.DEFAULT_MESSAGE = "Hi, do you wanna join for <dungeon> ?"
+-- The role in the whisper, as in "... as tank ?".
+ns.ROLE_WORD = { TANK = "tank", HEALER = "healer", DAMAGER = "dps" }
+
+ns.DEFAULT_MESSAGE = "Hi, do you wanna join for <dungeon> as <role> ?"
+local OLD_DEFAULT_MESSAGE = "Hi, do you wanna join for <dungeon> ?"
+
+-- An unanswered invite closes itself on the other side after 60 s (Blizzard's StaticPopup
+-- timeout) and comes back as a decline. EasyLFG only gives up later than that, so a player can
+-- never accept after their seat was offered to someone else.
+ns.MIN_TIMEOUT = 70
+ns.MAX_TIMEOUT = 180
 
 local function classSet(list)
 	local set = {}
@@ -47,9 +57,7 @@ local DEFAULT_SETTINGS = {
 	distinctClasses = false,
 	whisper = true,
 	message = ns.DEFAULT_MESSAGE,
-	delay = 5, -- seconds between two invites in auto mode
-	timeout = 60, -- seconds to wait for an answer before moving on
-	forgetMinutes = 30, -- a player who said no is not asked again for this long
+	timeout = 90, -- seconds before an invite without any answer is given up
 }
 
 -- Helpers --------------------------------------------------------------------------------
@@ -225,25 +233,50 @@ function ns.InitDB()
 		EasyLFGDB = {}
 	end
 	local db = EasyLFGDB
-	db.version = 1
 	db.settings = type(db.settings) == "table" and db.settings or {}
-	fillDefaults(db.settings, DEFAULT_SETTINGS)
-	db.asked = type(db.asked) == "table" and db.asked or {}
+	local settings = db.settings
+	-- Version 2: no "ask again after" setting, answers kept for the session only, the role in
+	-- the default whisper, and a time limit past the 60 s of the invite popup.
+	if (db.version or 1) < 2 then
+		settings.forgetMinutes = nil
+		db.asked = nil
+		if settings.message == OLD_DEFAULT_MESSAGE then
+			settings.message = ns.DEFAULT_MESSAGE
+		end
+	end
+	-- Version 3: auto mode invites right after an answer, so there is no delay setting.
+	if (db.version or 1) < 3 then
+		settings.delay = nil
+	end
+	db.version = 3
+	fillDefaults(settings, DEFAULT_SETTINGS)
+	settings.timeout = ns.Clamp(settings.timeout, ns.MIN_TIMEOUT, ns.MAX_TIMEOUT)
+	-- A group that needs nobody is a leftover of emptied number boxes (fixed in 1.1.0), not a choice.
+	local total = 0
+	for role, defaults in pairs(DEFAULT_SETTINGS.roles) do
+		settings.roles[role].need = ns.Clamp(settings.roles[role].need, 0, ns.MAX_PARTY)
+		settings.roles[role].minLevel = ns.Clamp(settings.roles[role].minLevel, 1, ns.MAX_LEVEL)
+		total = total + settings.roles[role].need
+	end
+	if total == 0 then
+		for role, defaults in pairs(DEFAULT_SETTINGS.roles) do
+			settings.roles[role].need = defaults.need
+		end
+		ns.repairedNeeds = true
+	end
 	db.memberRoles = type(db.memberRoles) == "table" and db.memberRoles or {}
 	ns.db = db
-	ns.settings = db.settings
+	ns.settings = settings
 	ns.ForgetOld()
 end
 
--- Drops what is too old to matter: answers past the memory window, roles of people long gone.
+-- Who was asked and what they answered, for this session only: a player who declined or did not
+-- answer is not invited again until you reload or use "Forget".
+ns.asked = {}
+
+-- Drops the roles of people who joined long ago.
 function ns.ForgetOld()
 	local now = time()
-	local window = (ns.settings.forgetMinutes or 30) * 60
-	for key, record in pairs(ns.db.asked) do
-		if type(record) ~= "table" or not record.time or now - record.time > math.max(window, 3600) then
-			ns.db.asked[key] = nil
-		end
-	end
 	for key, record in pairs(ns.db.memberRoles) do
 		if type(record) ~= "table" or not record.time or now - record.time > 12 * 3600 then
 			ns.db.memberRoles[key] = nil

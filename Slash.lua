@@ -13,7 +13,7 @@ end
 
 BINDING_HEADER_EASYLFG = "EasyLFG"
 BINDING_NAME_EASYLFG_TOGGLE = "Show or hide the window"
-BINDING_NAME_EASYLFG_INVITE_NEXT = "Invite the next player"
+BINDING_NAME_EASYLFG_INVITE_NEXT = "Invite (one player per open role)"
 BINDING_NAME_EASYLFG_SEARCH = "Search the Group Finder"
 
 function EasyLFG_Toggle()
@@ -94,14 +94,39 @@ local function printDebug()
 	local stats = Finder.stats or {}
 	print(("  Searches: %d sent (last %s), %d result events (last %s), searching %s, error %s"):format(
 		Finder.searchCount, ago(Finder.lastSearchAt), Finder.resultEvents, ago(Finder.lastResultsAt), tostring(Finder.searching), tostring(Finder.lastSearchError)))
+	print(("  Automatic searches: %d sent, refused by the game %s, unanswered in a row %d"):format(
+		Finder.autoSearches, yes(Finder.searchNeedsClick), Finder.silentFails))
 	print(("  Last results: %d listings, %d groups, %d other dungeons, %d solo here (%d hidden), %d match"):format(
 		stats.results or 0, stats.groups or 0, stats.otherActivity or 0, stats.solo or 0, stats.hidden or 0, stats.eligible or 0))
 	local state = Finder.GroupState()
+	local roles = ns.settings.roles
+	print(("  Wanted: tank %s, healer %s, dps %s; I am %s"):format(
+		tostring(roles.TANK.need), tostring(roles.HEALER.need), tostring(roles.DAMAGER.need), tostring(ns.settings.myRole)))
 	print(("  Group: %d/5, tank %d, healer %d, dps %d, unknown roles %d, leader %s"):format(
 		state.size, state.filled.TANK, state.filled.HEALER, state.filled.DAMAGER, state.unknownRoles, yes(Inviter.CanInvite())))
-	local p = Inviter.pending
-	print(("  Invites sent: %d, auto %s, pending %s%s"):format(Inviter.invitesSent, tostring(Inviter.auto),
-		p and p.name or "none", p and (" (" .. ago(p.sentAt) .. ", server confirmed " .. tostring(p.confirmed) .. ", whispered " .. tostring(p.whispered) .. ")") or ""))
+	for _, member in ipairs(state.members) do
+		local unit
+		for _, u in ipairs(Finder.GroupUnits()) do
+			if ns.ReadUnitName(u) and member.name and ns.SameName(ns.ReadUnitName(u), member.name) then
+				unit = u
+			end
+		end
+		local record = Finder.MemberRecord(member.name)
+		print(("    %s: %s (game says %s, picked %s, invited as %s)"):format(tostring(member.name), member.role,
+			tostring(unit and Finder.AssignedRole(unit)),
+			tostring(record and record.chosen), tostring(record and record.role)))
+	end
+	print(("  Invites sent: %d, auto %s, waiting: %d"):format(Inviter.invitesSent, tostring(Inviter.auto), Inviter.PendingCount()))
+	for _, role in ipairs(ns.ROLES) do
+		local p = Inviter.pending[role]
+		if p then
+			print(("    %s: %s, sent %s, server confirmed %s, whispered %s"):format(
+				ns.ROLE_LABEL[role], p.name, ago(p.sentAt), tostring(p.confirmed), tostring(p.whispered)))
+		end
+	end
+	local rc = Inviter.roleCheck
+	print(("  Role checks: InitiateRolePoll %s, %d started (last %s, result %s), %d answers (last %s), wanted %s"):format(
+		yes(InitiateRolePoll), rc.started, ago(rc.lastAt), tostring(rc.result), rc.answers, tostring(rc.lastAnswer), tostring(rc.wanted)))
 	print(("  Last system message understood: %s"):format(tostring(Inviter.lastSystem)))
 	print(("  Last invite error: %s; last whisper error: %s"):format(tostring(Inviter.lastInviteError), tostring(Inviter.lastWhisperError)))
 	local blocked = {}
@@ -121,8 +146,9 @@ local function help()
 	ns.Print("commands:")
 	print("  /elfg - show or hide the window")
 	print("  /elfg search - search the Group Finder for your dungeon")
-	print("  /elfg next - invite the next matching player")
+	print("  /elfg invite - invite one matching player for each open role")
 	print("  /elfg start | stop - auto invite on or off")
+	print("  /elfg rolecheck - ask the group to confirm their roles")
 	print("  /elfg forget - forget who declined or did not answer")
 	print("  /elfg debug - what the game allows, and what happened")
 	print("Key bindings: Options > Key Bindings > AddOns > EasyLFG.")
@@ -149,10 +175,14 @@ local function handle(input)
 		ns.SetStatus(message)
 		ns.Print(message)
 	elseif command == "forget" or command == "reset" then
-		wipe(ns.db.asked)
+		wipe(ns.asked)
 		wipe(ns.Finder.skipped)
 		ns.Finder.Evaluate()
 		say("Forgot every answer and skip; everyone can be asked again.")
+	elseif command == "rolecheck" or command == "roles" then
+		local _, message = ns.Inviter.StartRoleCheck()
+		ns.SetStatus(message)
+		ns.Print(message)
 	elseif command == "debug" then
 		printDebug()
 	else
@@ -166,4 +196,7 @@ SlashCmdList.EASYLFG = ns.Guard("slash command", handle)
 
 function ns.OnReady()
 	addGroupFinderButton()
+	if ns.repairedNeeds then
+		ns.Print("Every role was set to 0 needed; the needs are back to 1 tank, 1 healer and 3 DPS.")
+	end
 end

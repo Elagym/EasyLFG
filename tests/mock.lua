@@ -123,7 +123,13 @@ function M.Install()
 		local m = M.party[partyIndex(unit) or 0]
 		if m then return m.class, m.class end
 	end
-	_G.UnitGroupRolesAssigned = function(unit) local m = M.party[partyIndex(unit) or 0] return m and m.role or "NONE" end
+	_G.UnitGroupRolesAssigned = function(unit)
+		if unit == "player" then return M.myAssigned or "NONE" end
+		local m = M.party[partyIndex(unit) or 0]
+		return m and m.role or "NONE"
+	end
+	M.rolePolls = 0
+	_G.InitiateRolePoll = function() M.rolePolls = M.rolePolls + 1 return true end
 	_G.UnitIsUnit = function(a, b) return a == b end
 	_G.IsInGroup = function() return #M.party > 0 end
 	_G.IsInRaid = function() return false end

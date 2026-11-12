@@ -23,9 +23,12 @@ function ns.SetStatus(message)
 	ns.Refresh()
 end
 
+local guardedRefresh
+
 function ns.Refresh()
 	if frame and frame:IsShown() then
-		UI.Refresh()
+		guardedRefresh = guardedRefresh or ns.Guard("refresh", UI.Refresh)
+		guardedRefresh()
 	end
 end
 
@@ -70,7 +73,11 @@ local function newNumberBox(parent, width, low, high, get, set)
 		self:ClearFocus()
 	end)
 	box:SetScript("OnEditFocusLost", ns.Guard("number box", function(self)
-		set(ns.Clamp(self:GetText(), low, high))
+		-- An emptied box keeps its value: only a number you typed is saved.
+		local typed = tonumber(self:GetText() or "")
+		if typed then
+			set(ns.Clamp(typed, low, high))
+		end
 		self:load()
 		ns.Finder.Evaluate()
 		ns.Refresh()
@@ -220,12 +227,14 @@ end
 local function openRowMenu(owner, c)
 	openMenu(owner, function(_, root)
 		root:CreateTitle(c.name or "?")
-		local invite = root:CreateButton("Invite now", function()
-			local _, message = ns.Inviter.InviteCandidate(c)
+		local state = ns.Finder.state or ns.Finder.GroupState()
+		local role = ns.Inviter.RoleFor(c, state)
+		local invite = root:CreateButton(("Invite now as %s"):format(ns.ROLE_LABEL[role]), function()
+			local _, message = ns.Inviter.InviteCandidate(c, role)
 			ns.SetStatus(message)
 		end)
 		if invite.SetEnabled then
-			invite:SetEnabled(ns.Inviter.pending == nil and c.status ~= "ingroup" and c.name ~= nil)
+			invite:SetEnabled(ns.Inviter.pending[role] == nil and c.status ~= "ingroup" and c.status ~= "invited" and c.name ~= nil)
 		end
 		root:CreateButton("Whisper", function()
 			if ChatFrameUtil and ChatFrameUtil.SendTell then
@@ -249,7 +258,7 @@ local function openRowMenu(owner, c)
 		end
 		if c.key and ns.Finder.AskedRecord(c.key) then
 			root:CreateButton("Forget their answer", function()
-				ns.db.asked[c.key] = nil
+				ns.asked[c.key] = nil
 				ns.Finder.Evaluate()
 				ns.Refresh()
 			end)
@@ -354,34 +363,18 @@ local function buildSettings()
 		self:SetText(ns.settings.message)
 	end)
 	widgets.message = message
-	local hint = newLabel(frame, "<dungeon>, <role> and <name> are filled in for each player.", "GameFontDisableSmall")
+	local hint = newLabel(frame, "<dungeon>, <role> (tank, healer, dps) and <name> are filled in for each player.", "GameFontDisableSmall")
 	hint:SetPoint("TOPLEFT", message, "BOTTOMLEFT", -4, -3)
 
 	y = -262
-	local delayLabel = newLabel(frame, "Seconds between invites", "GameFontHighlightSmall")
-	delayLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, y - 4)
-	widgets.delay = newNumberBox(frame, 30, 1, 60, function()
-		return ns.settings.delay
-	end, function(value)
-		ns.settings.delay = value
-	end)
-	widgets.delay:SetPoint("TOPLEFT", frame, "TOPLEFT", 166, y)
-	local timeoutLabel = newLabel(frame, "Wait for an answer (s)", "GameFontHighlightSmall")
-	timeoutLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 222, y - 4)
-	widgets.timeout = newNumberBox(frame, 30, 10, 120, function()
+	local timeoutLabel = newLabel(frame, "Give up on an invite without any answer after (s)", "GameFontHighlightSmall")
+	timeoutLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, y - 4)
+	widgets.timeout = newNumberBox(frame, 36, ns.MIN_TIMEOUT, ns.MAX_TIMEOUT, function()
 		return ns.settings.timeout
 	end, function(value)
 		ns.settings.timeout = value
 	end)
-	widgets.timeout:SetPoint("TOPLEFT", frame, "TOPLEFT", 362, y)
-	local forgetLabel = newLabel(frame, "Ask again after (min)", "GameFontHighlightSmall")
-	forgetLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 412, y - 4)
-	widgets.forget = newNumberBox(frame, 30, 1, 600, function()
-		return ns.settings.forgetMinutes
-	end, function(value)
-		ns.settings.forgetMinutes = value
-	end)
-	widgets.forget:SetPoint("TOPLEFT", frame, "TOPLEFT", 540, y)
+	widgets.timeout:SetPoint("TOPLEFT", frame, "TOPLEFT", 330, y)
 end
 
 local function buildActions()
@@ -393,10 +386,10 @@ local function buildActions()
 		ns.SetStatus(message)
 	end))
 
-	widgets.next = newButton(frame, "Invite next", 110)
+	widgets.next = newButton(frame, "Invite", 110)
 	widgets.next:SetPoint("LEFT", widgets.search, "RIGHT", 8, 0)
-	widgets.next:SetScript("OnClick", ns.Guard("invite next", function()
-		local _, message = ns.Inviter.InviteNext(true)
+	widgets.next:SetScript("OnClick", ns.Guard("invite round", function()
+		local _, message = ns.Inviter.InviteRound(true)
 		ns.SetStatus(message)
 	end))
 
@@ -561,15 +554,19 @@ local function build()
 		elapsed = elapsed + delta
 		if elapsed >= 1 then
 			elapsed = 0
-			if ns.Inviter.pending or ns.Inviter.nextAt then
+			if next(ns.Inviter.pending) then
 				UI.RefreshStatus()
 			end
 		end
 	end)
-	frame:SetScript("OnShow", ns.Guard("show", function()
-		ns.Finder.Scan()
-		UI.Refresh()
-	end))
+	-- Opening the window reads the group and its roles afresh, then the list. Each step is
+	-- guarded on its own, so one surprise from the client cannot leave the rest blank.
+	frame:SetScript("OnShow", function()
+		ns.Guard("show: group", ns.Finder.Evaluate)()
+		ns.Guard("show: list", ns.Finder.Scan)()
+		ns.Guard("show: role check", ns.Inviter.CheckUnknownRoles)()
+		ns.Guard("show: refresh", UI.Refresh)()
+	end)
 
 	tinsert(UISpecialFrames, "EasyLFGFrame")
 end
@@ -589,29 +586,35 @@ local STATUS_COLOR = {
 
 function UI.RefreshStatus()
 	local text = ns.status or ""
-	local p = ns.Inviter.pending
-	if p then
-		local waited = math.floor(GetTime() - p.sentAt)
-		local limit = ns.Clamp(ns.settings.timeout, 10, 120)
-		text = ("Waiting for %s to answer (%d s left)."):format(ns.Colored(p.name, p.class), math.max(0, limit - waited))
-	elseif ns.Inviter.nextAt then
-		text = ("Next invite in %d s."):format(math.max(0, math.ceil(ns.Inviter.nextAt - GetTime())))
+	local limit = ns.Clamp(ns.settings.timeout, ns.MIN_TIMEOUT, ns.MAX_TIMEOUT)
+	local waiting = {}
+	for _, role in ipairs(ns.ROLES) do
+		local p = ns.Inviter.pending[role]
+		if p then
+			local left = math.max(0, limit - math.floor(GetTime() - p.sentAt))
+			waiting[#waiting + 1] = ("%s %s (%d s)"):format(roleIcon(role), ns.Colored(p.name, p.class), left)
+		end
+	end
+	if #waiting > 0 then
+		text = "Waiting for " .. table.concat(waiting, ", ")
 	end
 	widgets.status:SetText(text)
 end
 
+-- "Tank 1/1  Healer 0/1  DPS 2/3": in the group (invites waiting included) / wanted. Green when
+-- the role is filled, red when it has more than wanted.
 local function refreshGroup()
-	local state = ns.Finder.state or ns.Finder.GroupState()
+	local state = ns.Finder.GroupState()
 	local parts = {}
 	for _, role in ipairs(ns.ROLES) do
 		local need = ns.settings.roles[role].need
-		local have = math.min(state.filled[role], need)
-		local color = have >= need and "|cff60ff60" or "|cffffffff"
+		local have = state.filled[role]
+		local color = have > need and "|cffff6060" or (have == need and "|cff60ff60" or "|cffffffff")
 		parts[#parts + 1] = ("%s %s%d/%d|r"):format(roleIcon(role), color, have, need)
 	end
 	local text = table.concat(parts, "  ")
 	if state.unknownRoles > 0 then
-		text = text .. ("  |cff888888(%d as DPS?)|r"):format(state.unknownRoles)
+		text = text .. ("  |cff888888(%d unknown = DPS)|r"):format(state.unknownRoles)
 	end
 	widgets.group:SetText(text)
 end
@@ -675,18 +678,19 @@ function UI.Refresh()
 		end
 		row.classes:SetText(classSummary(s.roles[role]))
 	end
-	for _, box in ipairs({ widgets.delay, widgets.timeout, widgets.forget }) do
-		if not box:HasFocus() then
-			box:load()
-		end
+	if not widgets.timeout:HasFocus() then
+		widgets.timeout:load()
 	end
 	widgets.distinct:SetChecked(s.distinctClasses == true)
 	widgets.whisper:SetChecked(s.whisper == true)
 	if not widgets.message:HasFocus() then
 		widgets.message:SetText(s.message or "")
 	end
-	widgets.next:SetEnabled(ns.Inviter.pending == nil)
-	widgets.search:SetEnabled(not ns.Finder.searching)
+	-- No dungeon, no search and no invite.
+	local hasDungeon = s.activityID ~= nil
+	widgets.next:SetEnabled(hasDungeon)
+	widgets.auto:SetEnabled(hasDungeon or ns.Inviter.auto)
+	widgets.search:SetEnabled(hasDungeon and not ns.Finder.searching)
 	widgets.auto:SetText(ns.Inviter.auto and "Stop auto" or "Start auto")
 	refreshGroup()
 	UI.RefreshStatus()
