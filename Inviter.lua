@@ -1,14 +1,16 @@
--- EasyLFG Inviter: at most one invite in flight per role. A round invites, at the same time, one
--- player for each role that is still open and has no invite waiting: a tank, a healer and a DPS
--- at most. Each invite goes out together with its whisper ("... as tank ?"). A role gets its next
--- invite only once its player answered: joined, declined, already in a group, not found, or no
--- answer at all within the time limit.
+-- EasyLFG Inviter: one invite at a time, in total. The next invite goes out only once the player
+-- answered (declined, already in a group, not found, no answer within the time limit) or, when
+-- a tank or healer joined, once they confirmed their role in the role check that follows. Tanks
+-- and healers come first: a DPS is only invited when no wanted tank or healer is available.
+-- Each invite goes out together with its whisper ("... as tank ?").
 --
--- In auto mode an answer is followed straight away by the next invite for the freed role;
--- otherwise each round is one click on "Invite" (or its key binding).
+-- In auto mode an answer is followed straight away by the next invite; otherwise each invite is
+-- one click (the + on a row, or the "invite" key binding).
 --
 -- Someone who joined keeps their seat in `joining` until the roster shows them: the "joins the
 -- party" message can come before the roster update, and in between the seat would look empty.
+-- They also wait in `awaiting` until they answered the role check (or ROLE_WAIT passed): until
+-- then they count as the role they were invited for, whatever the game shows by default.
 
 local _, ns = ...
 
@@ -17,10 +19,13 @@ ns.Inviter = Inviter
 
 Inviter.pending = {} -- role -> { name, key, role, class, level, sentAt, token, confirmed, whispered }
 Inviter.joining = {} -- key -> { name, role, class, at }: joined, not in the roster yet
+Inviter.awaiting = {} -- key -> { name, role, joinedAt, deadline, assigned }: role check not answered yet
 Inviter.auto = false
 Inviter.inviteAfterSearch = false
 
 local JOINING_HOLD = 10 -- seconds a joiner's seat is held without the roster showing them
+local ROLE_WAIT = 30 -- seconds to wait for a joiner's role check answer before inviting again
+local ROLE_WAIT_START = 20 -- extra seconds allowed for the role check itself to start
 Inviter.invitesSent = 0
 Inviter.lastSystem = nil
 Inviter.lastInviteError = nil
@@ -95,6 +100,50 @@ function Inviter.PendingText()
 		end
 	end
 	return table.concat(parts, ", ")
+end
+
+-- Joiners whose role check answer has not come yet (expired ones are let go here, with a log line).
+function Inviter.AwaitingRoles()
+	local list = {}
+	for key, entry in pairs(Inviter.awaiting) do
+		if GetTime() >= entry.deadline then
+			Inviter.EndRoleWait(key, "timeout")
+		else
+			list[#list + 1] = entry
+		end
+	end
+	table.sort(list, function(a, b) return a.joinedAt < b.joinedAt end)
+	return list
+end
+
+-- The role wait for this name, if any: key, entry.
+function Inviter.AwaitingEntry(name)
+	for key, entry in pairs(Inviter.awaiting) do
+		if ns.SameName(entry.name, name) then
+			return key, entry
+		end
+	end
+	return nil, nil
+end
+
+-- Why no new invite can go out right now, or nil: an invite waits for its answer, or someone who
+-- joined has not confirmed their role yet.
+function Inviter.Busy()
+	for _, role in ipairs(ns.ROLES) do
+		local invite = Inviter.pending[role]
+		if invite then
+			return "invite", ("Waiting for %s's answer (invited as %s)."):format(invite.name, ns.ROLE_LABEL[role])
+		end
+	end
+	local awaiting = Inviter.AwaitingRoles()
+	if #awaiting > 0 then
+		local names = {}
+		for _, entry in ipairs(awaiting) do
+			names[#names + 1] = entry.name
+		end
+		return "rolecheck", ("Waiting for %s to confirm their role in the role check."):format(table.concat(names, ", "))
+	end
+	return nil
 end
 
 -- Permission ---------------------------------------------------------------------------------
@@ -181,8 +230,8 @@ function Inviter.RoleFor(c, state)
 end
 
 -- The + button on a player's row: can it invite them now, and for which role? Returns
--- ok, role, why-not. Only players who fit your rules get an active button; a role with an invite
--- waiting keeps the button off until that answer comes back.
+-- ok, role, why-not. Only players who fit your rules get an active button, and only while no
+-- other invite or role check is waiting.
 function Inviter.RowInvite(c)
 	if not c or not c.name or c.status == "hidden" then
 		return false, nil, "Their details are hidden by the game."
@@ -202,13 +251,11 @@ function Inviter.RowInvite(c)
 	if c.status ~= "match" then
 		return false, nil, (c.reason or "Does not fit your rules") .. ". Click the row to invite anyway."
 	end
-	for _, role in ipairs(ns.ROLES) do
-		if c.fits[role] and not Inviter.pending[role] then
-			return true, role, nil
-		end
+	local busy, why = Inviter.Busy()
+	if busy then
+		return false, c.role, why .. " One invite at a time."
 	end
-	local waiting = Inviter.pending[c.role]
-	return false, c.role, ("Waiting for %s's answer as %s first."):format(waiting and waiting.name or "?", ns.ROLE_LABEL[c.role] or "?")
+	return true, c.role, nil
 end
 
 -- A click on the + button: whisper and invite this player, then refresh the list (the click
@@ -245,9 +292,9 @@ function Inviter.InviteCandidate(c, role, source)
 		return false, "Your group is full."
 	end
 	role = role or Inviter.RoleFor(c, state)
-	local waiting = Inviter.pending[role]
-	if waiting then
-		return false, ("Still waiting for %s to answer as %s."):format(waiting.name, ns.ROLE_LABEL[role])
+	local busy, why = Inviter.Busy()
+	if busy then
+		return false, why
 	end
 
 	local whispered = false
@@ -348,10 +395,10 @@ function Inviter.Finish(state)
 	end
 end
 
--- One round: one invite for each open role without an invite waiting, tank first, then healer,
--- then DPS. Each pick sees the ones before it (seats, distinct classes, the same player twice).
--- `fromClick` is true for a click or key press: then a round with nobody to invite may start a
--- fresh search, which the game only allows from such an action. Returns ok, message.
+-- One invite: the best match for the first open role that has one, tank first, then healer,
+-- then DPS. Nothing goes out while another invite or a joiner's role check is still waiting.
+-- `fromClick` is true for a click or key press: then nobody to invite may start a fresh search,
+-- which the game only allows from such an action. Returns ok, message.
 function Inviter.InviteRound(fromClick)
 	if not ns.settings.activityID then
 		return false, "Pick a dungeon first."
@@ -359,31 +406,36 @@ function Inviter.InviteRound(fromClick)
 	if not Inviter.CanInvite() then
 		return false, "Only the group leader can invite."
 	end
+	local busy, why = Inviter.Busy()
+	if busy then
+		return false, why
+	end
 	local state = ns.Finder.Evaluate()
-	if state.done and Inviter.PendingCount() == 0 then
+	if state.done then
 		Inviter.Finish(state)
 		return false, state.complete and "Your group is complete." or "Your group is full."
 	end
 
-	-- The rules in use, logged whenever they changed since the last round.
+	-- The rules in use, logged whenever they changed since the last invite.
 	local rules = Inviter.RulesText()
 	if rules ~= Inviter.lastRulesLogged then
 		Inviter.lastRulesLogged = rules
 		addLog(rules)
 	end
 
-	local sent, failures, missing = {}, {}, {}
+	local missing, failure = {}, nil
 	for _, role in ipairs(ns.ROLES) do
-		state = ns.Finder.Evaluate()
-		if not Inviter.pending[role] and state.remaining[role] > 0 and not state.full then
+		if state.remaining[role] > 0 then
 			local c = ns.Finder.BestFor(role)
 			if c then
 				local ok, message = Inviter.InviteCandidate(c, role, Inviter.auto and "auto" or "round")
 				if ok then
-					sent[#sent + 1] = ("%s as %s"):format(c.name, ns.ROLE_LABEL[role])
-				else
-					failures[#failures + 1] = message
+					Inviter.lastMissingLogged = nil
+					-- A fresh list for the next answer. From a click this is always allowed.
+					ns.Finder.Refresh(fromClick)
+					return true, message
 				end
+				failure = failure or message
 			else
 				missing[#missing + 1] = ns.ROLE_LABEL[role]
 			end
@@ -399,20 +451,8 @@ function Inviter.InviteRound(fromClick)
 	end
 	Inviter.lastMissingLogged = missingText
 
-	if #sent > 0 then
-		-- A fresh list for the next answers. From a click this is always allowed.
-		ns.Finder.Refresh(fromClick)
-		return true, "Invited " .. table.concat(sent, ", ") .. "."
-	end
-	if #failures > 0 then
-		return false, failures[1]
-	end
-	if Inviter.PendingCount() > 0 then
-		local text = "Waiting for " .. Inviter.PendingText() .. "."
-		if #missing > 0 then
-			text = text .. (" Nobody matches as %s yet."):format(table.concat(missing, " or "))
-		end
-		return false, text
+	if failure then
+		return false, failure
 	end
 	local stale = not ns.Finder.lastResultsAt or GetTime() - ns.Finder.lastResultsAt > 15
 	if fromClick and stale and not ns.Finder.searching then
@@ -430,8 +470,8 @@ Inviter.InviteNext = Inviter.InviteRound
 
 -- Auto mode -----------------------------------------------------------------------------------
 
--- In auto mode, fills every free role right now. Only roles without an invite waiting get one,
--- so this is safe to call after any answer or roster change.
+-- In auto mode, sends the next invite if nothing is waiting, so this is safe to call after any
+-- answer or roster change.
 function Inviter.Continue()
 	if not Inviter.auto then
 		return
@@ -440,14 +480,15 @@ function Inviter.Continue()
 	ns.SetStatus(message)
 end
 
--- True when a role is open and has no invite waiting: new players would be useful.
+-- True when a seat is still open (an invite waiting takes its seat): the next invite will want
+-- a fresh list, so it keeps refreshing even while an answer or a role check is awaited.
 function Inviter.HasOpenRole()
 	local state = ns.Finder.GroupState()
 	if state.full then
 		return false
 	end
 	for _, role in ipairs(ns.ROLES) do
-		if state.remaining[role] > 0 and not Inviter.pending[role] then
+		if state.remaining[role] > 0 then
 			return true
 		end
 	end
@@ -487,7 +528,7 @@ function Inviter.Start()
 		return false, "Only the group leader can invite."
 	end
 	local state = ns.Finder.Evaluate()
-	if state.done and Inviter.PendingCount() == 0 then
+	if state.done and not Inviter.Busy() then
 		return false, state.complete and "Your group is already complete." or "Your group is full."
 	end
 	Inviter.auto = true
@@ -559,26 +600,84 @@ function Inviter.Resolve(invite, outcome)
 	end
 	Inviter.pending[invite.role] = nil
 	ns.asked[invite.key] = { name = invite.name, outcome = outcome, time = time(), role = invite.role }
-	if outcome == "joined" then
-		ns.db.memberRoles[invite.key] = { name = invite.name, role = invite.role, time = time() }
-		holdSeat(invite.key, invite.name, invite.role, invite.class)
-		if invite.role == "TANK" or invite.role == "HEALER" then
-			Inviter.RequestRoleCheck()
-		end
-	end
 	addLog(("%s (%s): %s after %d s%s"):format(invite.name, ns.ROLE_LABEL[invite.role],
 		Inviter.OUTCOME_LOG[outcome] or outcome, math.floor(GetTime() - invite.sentAt),
 		invite.confirmed and "" or " (server never confirmed the invite)"))
 	ns.Print(("%s %s."):format(describe(invite), OUTCOME_PRINT[outcome] or outcome))
+	if outcome == "joined" then
+		ns.db.memberRoles[invite.key] = { name = invite.name, role = invite.role, time = time() }
+		holdSeat(invite.key, invite.name, invite.role, invite.class)
+		Inviter.AwaitRole(invite.key, invite.name, invite.role)
+	end
+	Inviter.AfterAnswer()
+end
 
+-- After an answer or a finished role check: the group is complete, or the next invite (auto
+-- mode), or a hint for the next click.
+function Inviter.AfterAnswer()
+	local busy, why = Inviter.Busy()
+	if busy then
+		ns.SetStatus(why)
+		return
+	end
 	local state = ns.Finder.Evaluate()
-	if state.done and Inviter.PendingCount() == 0 then
+	if state.done then
 		Inviter.Finish(state)
 		ns.SetStatus(state.complete and "Your group is complete!" or "Your group is full.")
 	elseif Inviter.auto then
 		Inviter.Continue()
 	else
-		ns.SetStatus("Click Invite for the next round.")
+		ns.SetStatus("Click + on a player for the next invite, or Start auto.")
+	end
+end
+
+-- A tank or healer joined: no new invite until they confirmed their role in a role check (started
+-- as soon as the roster shows them), or ROLE_WAIT passed without an answer. A DPS needs no check:
+-- everyone is marked DPS by default.
+function Inviter.AwaitRole(key, name, role)
+	if not key or (role ~= "TANK" and role ~= "HEALER") then
+		return
+	end
+	Inviter.awaiting[key] = { name = name, role = role, joinedAt = GetTime(),
+		deadline = GetTime() + ROLE_WAIT_START + ROLE_WAIT }
+	Inviter.RequestRoleCheck(("%s joined as %s"):format(name, ns.ROLE_LABEL[role]))
+	C_Timer.After(ROLE_WAIT_START + ROLE_WAIT + 0.1, ns.Guard("role wait", Inviter.CheckRoleWait))
+end
+
+-- Lets go of joiners whose role check answer did not come in time.
+function Inviter.CheckRoleWait()
+	local before = next(Inviter.awaiting) ~= nil
+	Inviter.AwaitingRoles() -- ends the expired ones
+	if before and not next(Inviter.awaiting) then
+		Inviter.AfterRoleChange()
+	end
+end
+
+-- Stops waiting for one joiner's role. `how`: "answered" (with the role), "timeout", "nocheck"
+-- (no role check could start), "left".
+function Inviter.EndRoleWait(key, how, role)
+	local entry = Inviter.awaiting[key]
+	if not entry then
+		return
+	end
+	Inviter.awaiting[key] = nil
+	local waited = math.floor(GetTime() - entry.joinedAt)
+	if how == "answered" then
+		addLog(("Role check done for %s: %s (invited as %s, %d s after joining)"):format(entry.name,
+			ns.ROLE_LABEL[role] or "?", ns.ROLE_LABEL[entry.role], waited))
+	elseif how == "left" then
+		addLog(("%s left before confirming a role"):format(entry.name))
+	else
+		local shown
+		for _, unit in ipairs(ns.Finder.GroupUnits()) do
+			local unitName = ns.ReadUnitName(unit)
+			if unitName and ns.SameName(unitName, entry.name) then
+				shown = ns.Finder.AssignedRole(unit)
+			end
+		end
+		addLog(("%s: no role check answer from %s after %d s; counted as %s (the game shows %s)"):format(
+			how == "nocheck" and "No role check" or "Role check timed out", entry.name, waited,
+			ns.ROLE_LABEL[entry.role], shown and ns.ROLE_LABEL[shown] or "no role"))
 	end
 end
 
@@ -596,9 +695,7 @@ function Inviter.OnJoined(name)
 		ns.db.memberRoles[key] = { name = name, role = record.role, time = time() }
 		holdSeat(key, name, record.role, nil)
 		addLog(("%s joined late (invited as %s, given up earlier)"):format(name, ns.ROLE_LABEL[record.role]))
-		if record.role == "TANK" or record.role == "HEALER" then
-			Inviter.RequestRoleCheck()
-		end
+		Inviter.AwaitRole(key, name, record.role)
 		local state = ns.Finder.Evaluate()
 		local need = ns.settings.roles[record.role].need
 		if state.filled[record.role] > need then
@@ -611,9 +708,37 @@ end
 
 -- Role checks ---------------------------------------------------------------------------------
 -- When an invited tank or healer joins, EasyLFG starts a role check (InitiateRolePoll, open to
--- addons) so everyone confirms their role. Answers arrive as ROLE_CHANGED_INFORM and are also
--- what UnitGroupRolesAssigned shows; they count over the role someone was invited for. A player
--- who picks another role frees the seat they were invited for, and auto mode fills it again.
+-- addons) so everyone confirms their role, and sends no new invite until the joiner answered.
+-- A DPS joining needs none: everyone is marked DPS by default.
+-- Answers arrive as ROLE_CHANGED_INFORM (and change what UnitGroupRolesAssigned shows); they
+-- count over the role someone was invited for. Before answering, a joiner counts as the role
+-- they were invited for, whatever role the game gives them by default. A player who picks
+-- another role frees the seat they were invited for, and auto mode fills it again.
+
+-- Stops every role wait at once (no role check can start, so no answer will come).
+local function endAllRoleWaits(how)
+	for key in pairs(Inviter.awaiting) do
+		Inviter.EndRoleWait(key, how)
+	end
+end
+
+-- The role check started: the joiners get ROLE_WAIT from now to answer. The role the game shows
+-- for them now is kept, so a change seen later counts as their answer.
+local function roleCheckStarted()
+	for _, entry in pairs(Inviter.awaiting) do
+		entry.checkAt = GetTime()
+		entry.deadline = GetTime() + ROLE_WAIT
+		for _, unit in ipairs(ns.Finder.GroupUnits()) do
+			local unitName = ns.ReadUnitName(unit)
+			if unitName and ns.SameName(unitName, entry.name) then
+				entry.assigned = ns.Finder.AssignedRole(unit) or "NONE"
+			end
+		end
+	end
+	if next(Inviter.awaiting) then
+		C_Timer.After(ROLE_WAIT + 0.1, ns.Guard("role wait", Inviter.CheckRoleWait))
+	end
+end
 
 Inviter.roleCheck = { wanted = false, started = 0, answers = 0 }
 local ROLE_CHECK_GAP = 5 -- seconds between two role checks
@@ -645,7 +770,19 @@ function Inviter.StartRoleCheck()
 	end
 	addLog("Role check started (" .. (rc.reason or "by hand") .. ")")
 	rc.reason = nil
+	roleCheckStarted()
 	return true, "Role check started: everyone confirms their role."
+end
+
+-- A role check that cannot start will never be answered: stop waiting for it.
+local startRoleCheck = Inviter.StartRoleCheck
+function Inviter.StartRoleCheck()
+	local ok, message = startRoleCheck()
+	if not ok and next(Inviter.awaiting) then
+		endAllRoleWaits("nocheck")
+		Inviter.AfterRoleChange()
+	end
+	return ok, message
 end
 
 -- Starts the wanted role check once nobody who just joined is missing from the roster, and not
@@ -673,39 +810,9 @@ function Inviter.TryRoleCheck(force)
 	ns.SetStatus(message)
 end
 
-local lastUnknownSignature
-
--- On opening the window: if group members have no known role (not picked in a role check, not
--- invited by EasyLFG), ask them with a role check. Once per set of such members, so opening the
--- window again does not pester the group.
-function Inviter.CheckUnknownRoles()
-	if not ns.Readable(IsInGroup()) or not Inviter.CanInvite() then
-		return
-	end
-	local state = ns.Finder.GroupState()
-	local names = {}
-	for _, member in ipairs(state.members) do
-		if not member.known then
-			names[#names + 1] = ns.MakeKey(member.name) or "?"
-		end
-	end
-	if #names == 0 then
-		return
-	end
-	table.sort(names)
-	local signature = table.concat(names, ",")
-	if signature == lastUnknownSignature then
-		return
-	end
-	lastUnknownSignature = signature
+function Inviter.RequestRoleCheck(reason)
 	Inviter.roleCheck.wanted = true
-	Inviter.roleCheck.reason = ("window opened, unknown role: %s"):format(signature)
-	Inviter.TryRoleCheck(true)
-end
-
-function Inviter.RequestRoleCheck()
-	Inviter.roleCheck.wanted = true
-	Inviter.roleCheck.reason = "a tank or healer joined"
+	Inviter.roleCheck.reason = reason or "someone joined"
 	C_Timer.After(ROLE_CHECK_FALLBACK, ns.Guard("role check fallback", function()
 		Inviter.TryRoleCheck(true)
 	end))
@@ -714,8 +821,10 @@ end
 -- Roles changed (an answer, or the game's own update): count seats again and act on it.
 function Inviter.AfterRoleChange()
 	local state = ns.Finder.Evaluate()
-	if state.done then
-		if state.complete and Inviter.PendingCount() == 0 and not Inviter.announcedComplete and Inviter.invitesSent > 0 then
+	if Inviter.Busy() then
+		ns.SetStatus((select(2, Inviter.Busy())))
+	elseif state.done then
+		if state.complete and not Inviter.announcedComplete and Inviter.invitesSent > 0 then
 			Inviter.Finish(state)
 		end
 	else
@@ -755,7 +864,19 @@ function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
 				ns.db.memberRoles[key] = record
 			end
 		end
+		local waitKey, entry = Inviter.AwaitingEntry(changedName)
+		if entry and not entry.checkAt then
+			-- The game giving a fresh joiner a default role, before any role check: not their answer.
+			record.early = newRole
+			addLog(("%s was set to %s before the role check; still counted as %s until they answer"):format(
+				changedName, ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[entry.role]))
+			ns.Refresh()
+			return
+		end
 		record.chosen = newRole
+		if entry then
+			Inviter.EndRoleWait(waitKey, "answered", newRole)
+		end
 		local invitedFor = record.role
 		if invitedFor and invitedFor ~= newRole then
 			ns.Print(("|cffffd100%s picked %s in the role check (invited as %s): the %s seat is open again.|r"):format(
@@ -874,7 +995,21 @@ function Inviter.OnRoster()
 			end
 		end
 	end
-	-- A tank or healer who just joined is in the roster now: time for the role check.
+	-- Someone who left (or never showed up in the roster) will not answer a role check.
+	local units = ns.Finder.GroupUnits()
+	for key, entry in pairs(Inviter.awaiting) do
+		local present = Inviter.joining[key] ~= nil
+		for _, unit in ipairs(units) do
+			local name = ns.ReadUnitName(unit)
+			if name and ns.SameName(name, entry.name) then
+				present = true
+			end
+		end
+		if not present then
+			Inviter.EndRoleWait(key, "left")
+		end
+	end
+	-- Whoever just joined is in the roster now: time for the role check.
 	Inviter.TryRoleCheck()
 	if Inviter.auto and not Inviter.CanInvite() then
 		addLog("You are no longer the group leader")
@@ -882,7 +1017,11 @@ function Inviter.OnRoster()
 		ns.SetStatus("You are no longer the group leader; auto invite is off.")
 	end
 	local state = ns.Finder.Evaluate()
-	if state.done and Inviter.PendingCount() == 0 then
+	if Inviter.Busy() then
+		ns.Refresh()
+		return
+	end
+	if state.done then
 		if Inviter.auto then
 			Inviter.Finish(state)
 		elseif state.complete and not Inviter.announcedComplete and ns.settings.activityID and Inviter.invitesSent > 0 then
@@ -919,6 +1058,24 @@ end
 ns.On("CHAT_MSG_SYSTEM", "system message", Inviter.OnSystemMessage)
 ns.On("GROUP_ROSTER_UPDATE", "roster", Inviter.OnRoster)
 ns.On("ROLE_CHANGED_INFORM", "role changed", Inviter.OnRoleChanged)
-ns.On("PLAYER_ROLES_ASSIGNED", "roles assigned", function()
+-- Roles were updated. A joiner whose role the game now shows differently than when the role
+-- check started has answered it, even if no ROLE_CHANGED_INFORM named them.
+function Inviter.OnRolesAssigned()
+	for _, unit in ipairs(ns.Finder.GroupUnits()) do
+		local name = ns.ReadUnitName(unit)
+		local key, entry = Inviter.AwaitingEntry(name)
+		if entry and entry.checkAt then
+			local shown = ns.Finder.AssignedRole(unit)
+			if shown and shown ~= entry.assigned then
+				local record = ns.Finder.MemberRecord(name)
+				if record then
+					record.chosen = shown
+				end
+				Inviter.EndRoleWait(key, "answered", shown)
+			end
+		end
+	end
 	Inviter.AfterRoleChange()
-end)
+end
+
+ns.On("PLAYER_ROLES_ASSIGNED", "roles assigned", Inviter.OnRolesAssigned)

@@ -240,7 +240,7 @@ local function openRowMenu(owner, c)
 			ns.SetStatus(message)
 		end)
 		if invite.SetEnabled then
-			invite:SetEnabled(ns.Inviter.pending[role] == nil and c.status ~= "ingroup" and c.status ~= "invited" and c.name ~= nil)
+			invite:SetEnabled(not ns.Inviter.Busy() and c.status ~= "ingroup" and c.status ~= "invited" and c.name ~= nil)
 		end
 		root:CreateButton("Whisper", function()
 			if ChatFrameUtil and ChatFrameUtil.SendTell then
@@ -603,7 +603,7 @@ local function build()
 		elapsed = elapsed + delta
 		if elapsed >= 1 then
 			elapsed = 0
-			if next(ns.Inviter.pending) then
+			if next(ns.Inviter.pending) or next(ns.Inviter.awaiting) then
 				UI.RefreshStatus()
 			end
 		end
@@ -613,7 +613,6 @@ local function build()
 	frame:SetScript("OnShow", function()
 		ns.Guard("show: group", ns.Finder.Evaluate)()
 		ns.Guard("show: list", ns.Finder.Scan)()
-		ns.Guard("show: role check", ns.Inviter.CheckUnknownRoles)()
 		ns.Guard("show: refresh", UI.Refresh)()
 	end)
 
@@ -646,6 +645,14 @@ function UI.RefreshStatus()
 	end
 	if #waiting > 0 then
 		text = "Waiting for " .. table.concat(waiting, ", ")
+	else
+		for _, entry in ipairs(ns.Inviter.AwaitingRoles()) do
+			local left = math.max(0, math.floor(entry.deadline - GetTime()))
+			waiting[#waiting + 1] = ("%s (%d s)"):format(entry.name, left)
+		end
+		if #waiting > 0 then
+			text = "Role check: waiting for " .. table.concat(waiting, ", ") .. " to confirm their role"
+		end
 	end
 	widgets.status:SetText(text)
 end

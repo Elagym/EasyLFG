@@ -177,19 +177,22 @@ function Finder.AssignedRole(unit)
 	return ns.ROLE_LABEL[assigned] and assigned or nil
 end
 
--- A member's role, most reliable first: what they picked in a role check (as the game shows it,
--- or as EasyLFG heard it), then what EasyLFG invited them for, then DPS as a guess.
+-- A member's role, most reliable first. For someone EasyLFG invited: their last answer to a role
+-- check (or role change) as EasyLFG heard it, else the role they were invited for. The game's
+-- role alone is not trusted for them: a fresh joiner gets a default role (often DPS) before
+-- answering, which would make their seat look free. For anyone else: the game's role, then an
+-- answer EasyLFG heard, then DPS as a guess.
 local function memberRole(name, unit)
 	local assigned = Finder.AssignedRole(unit)
+	local record = Finder.MemberRecord(name)
+	if record and ns.ROLE_LABEL[record.role] then
+		return ns.ROLE_LABEL[record.chosen] and record.chosen or record.role, true
+	end
 	if assigned then
 		return assigned, true
 	end
-	local record = Finder.MemberRecord(name)
 	if record and ns.ROLE_LABEL[record.chosen] then
 		return record.chosen, true
-	end
-	if record and ns.ROLE_LABEL[record.role] then
-		return record.role, true
 	end
 	return "DAMAGER", false
 end

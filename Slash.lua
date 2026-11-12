@@ -127,6 +127,11 @@ local function printDebug()
 	local rc = Inviter.roleCheck
 	print(("  Role checks: InitiateRolePoll %s, %d started (last %s, result %s), %d answers (last %s), wanted %s"):format(
 		yes(InitiateRolePoll), rc.started, ago(rc.lastAt), tostring(rc.result), rc.answers, tostring(rc.lastAnswer), tostring(rc.wanted)))
+	for _, entry in ipairs(Inviter.AwaitingRoles()) do
+		print(("    waiting for %s's role (invited as %s, joined %s, check started %s, %d s left)"):format(
+			entry.name, ns.ROLE_LABEL[entry.role], ago(entry.joinedAt), ago(entry.checkAt),
+			math.max(0, math.floor(entry.deadline - GetTime()))))
+	end
 	print(("  Last system message understood: %s"):format(tostring(Inviter.lastSystem)))
 	print(("  Last invite error: %s; last whisper error: %s"):format(tostring(Inviter.lastInviteError), tostring(Inviter.lastWhisperError)))
 	local blocked = {}
@@ -147,7 +152,7 @@ local function help()
 	ns.Print("commands:")
 	print("  /elfg - show or hide the window")
 	print("  /elfg search - search the Group Finder for your dungeon")
-	print("  /elfg invite - invite one matching player for each open role")
+	print("  /elfg invite - invite the next matching player (tank, then healer, then dps)")
 	print("  /elfg start | stop - auto invite on or off")
 	print("  /elfg rolecheck - ask the group to confirm their roles")
 	print("  /elfg forget - forget who declined or did not answer")
