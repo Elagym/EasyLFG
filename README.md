@@ -9,7 +9,7 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 - For each role (**Tank / Healer / DPS**), set:
   - how many you need,
   - the **minimum level**,
-  - the **classes** you accept.
+  - the **classes** you accept. Each role only offers the classes able to play it: Warrior, Paladin and Druid for tanks; Paladin, Priest, Shaman and Druid for healers; every class for DPS.
 - Optionally ask for **distinct classes only**.
 - EasyLFG only searches, and only reads, the listings for the dungeon you picked. Without a dungeon, it does neither.
 - It reads the players who listed themselves alone for that dungeon. For each open role it picks the best match: highest level first, then the one listed longest.
@@ -26,7 +26,9 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 
 - `/elfg` opens the window. There is also an **EasyLFG** button in Blizzard's Group Finder.
 - **Search** asks the Group Finder for your dungeon. Searches made in Blizzard's own window are used too.
-- **Invite** sends one round: one invite per open role that has none waiting.
+- The **+** button on a player's row whispers and invites that player, for the open role they fit, then refreshes the list.
+  - It's greyed out when the player doesn't fit your rules, or while that role already has an invite waiting. Hovering it says why.
+  - Clicking the row offers "Invite anyway" for players outside the rules.
 - **Start auto** keeps going on its own until the group is complete. As soon as a player declines, is already in a group, can't be found or doesn't answer, the next player for that role is invited right away. New search results are used straight away too.
 - Key bindings are under *Key Bindings > AddOns > EasyLFG*.
 
@@ -38,11 +40,25 @@ The game always allows a search from a click or a key press, so the refresh afte
 |---|---|
 | `/elfg` | show or hide the window |
 | `/elfg search` | search the Group Finder |
-| `/elfg invite` | invite one matching player per open role |
+| `/elfg invite` | invite one matching player per open role (also a key binding) |
 | `/elfg start` / `stop` | auto invite on or off |
 | `/elfg rolecheck` | ask the group to confirm their roles |
 | `/elfg forget` | forget who declined or did not answer |
+| `/elfg log` | show what EasyLFG did |
 | `/elfg debug` | what the game allows, and what happened |
+
+## Log
+
+The **Log** button (or `/elfg log`) shows every action EasyLFG took, one timestamped line each:
+- the rules in use and the dungeon chosen;
+- each search and what it found;
+- each invite, with the exact whisper sent;
+- each answer, and how long it took;
+- role checks, and the roles picked in them;
+- auto mode turning on and off;
+- anything the game blocked, and any errors.
+
+The same line repeated is counted instead of written again. The last 500 lines are kept, also after a reload. **Select all**, then Ctrl+C, copies the log to share it.
 
 ## Development
 

@@ -120,6 +120,7 @@ function Finder.SetActivity(activity)
 	s.activityID = activity.id
 	s.activityName = activity.name
 	s.categoryID = activity.categoryID
+	ns.Log(("Dungeon set: %s (activity %s)"):format(tostring(activity.name), tostring(activity.id)))
 	if activity.minLevel and activity.minLevel > 0 then
 		for _, role in ipairs(ns.ROLES) do
 			s.roles[role].minLevel = ns.Clamp(activity.minLevel, 1, ns.MAX_LEVEL)
@@ -582,6 +583,7 @@ function Finder.SearchRefused(why)
 	if not Finder.searchNeedsClick then
 		Finder.searchNeedsClick = true
 		Finder.lastSearchError = why
+		ns.Log("Automatic searches refused (" .. tostring(why) .. "): from now on only Search clicks refresh the list")
 		ns.Print("The game only allows a Group Finder search from a click here. Press |cffffd100Search|r (or its key binding) to refresh the list.")
 	end
 	ns.SetStatus("Press Search for a fresh list: the game refused an automatic search.")
@@ -613,10 +615,12 @@ function Finder.Search(auto)
 	Finder.searchCount = Finder.searchCount + 1
 	if not ok then
 		Finder.lastSearchError = tostring(err)
+		ns.Log("Search FAILED: " .. tostring(err))
 		return false, "The search failed: " .. tostring(err)
 	end
 	Finder.searching = true
 	Finder.searchFromClick = not auto
+	Finder.searchSentAt = GetTime()
 	Finder.lastSearchError = nil
 	if auto then
 		Finder.autoSearches = Finder.autoSearches + 1
@@ -629,6 +633,7 @@ function Finder.Search(auto)
 		end
 		-- No answer at all: the search did not happen.
 		Finder.searching = false
+		ns.Log(("Search (%s) got no answer within %d s"):format(auto and "automatic" or "click", SEARCH_WATCHDOG))
 		if auto then
 			Finder.silentFails = Finder.silentFails + 1
 			if Finder.silentFails >= SILENT_FAILS_TO_GIVE_UP then
@@ -680,13 +685,24 @@ function Finder.QueueScan()
 end
 
 ns.On("LFG_LIST_SEARCH_RESULTS_RECEIVED", "search results", function()
-	if Finder.searching and not Finder.searchFromClick then
-		Finder.silentFails = 0 -- automatic searches work on this client
+	local source
+	if Finder.searching then
+		source = Finder.searchFromClick and "your click" or "automatic"
+		if not Finder.searchFromClick then
+			Finder.silentFails = 0 -- automatic searches work on this client
+		end
+	else
+		source = "Blizzard's window or another addon"
 	end
 	Finder.searching = false
 	Finder.lastResultsAt = GetTime()
 	Finder.resultEvents = Finder.resultEvents + 1
 	Finder.Scan()
+	local stats = Finder.stats
+	if ns.settings.activityID then
+		ns.Log(("List refreshed (%s): %d listings, %d alone for %s, %d hidden, %d match"):format(source,
+			stats.results or 0, stats.solo or 0, ns.settings.activityName or "?", stats.hidden or 0, stats.eligible or 0))
+	end
 	if ns.Inviter then
 		ns.Inviter.OnResults()
 	end
@@ -696,6 +712,7 @@ end)
 ns.On("LFG_LIST_SEARCH_FAILED", "search failed", function(_, reason)
 	Finder.searching = false
 	Finder.lastSearchError = "search failed" .. (ns.Readable(reason) and (": " .. tostring(reason)) or "")
+	ns.Log("Group Finder: " .. Finder.lastSearchError)
 	-- Usually the server asking us to slow down: auto mode tries again on its next refresh.
 	if ns.Inviter and ns.Inviter.auto then
 		ns.SetStatus("The Group Finder search failed; auto mode tries again shortly.")

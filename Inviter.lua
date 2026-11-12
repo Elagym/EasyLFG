@@ -21,7 +21,6 @@ Inviter.auto = false
 Inviter.inviteAfterSearch = false
 
 local JOINING_HOLD = 10 -- seconds a joiner's seat is held without the roster showing them
-Inviter.log = {}
 Inviter.invitesSent = 0
 Inviter.lastSystem = nil
 Inviter.lastInviteError = nil
@@ -51,10 +50,7 @@ Inviter.OUTCOME_LOG = {
 }
 
 local function addLog(text)
-	table.insert(Inviter.log, 1, { at = date("%H:%M:%S"), text = text })
-	while #Inviter.log > 30 do
-		table.remove(Inviter.log)
-	end
+	ns.Log(text)
 end
 
 local function describe(c)
@@ -162,6 +158,12 @@ end
 -- The role for an invite by hand: the first role they fit, else the first role they listed that
 -- is still open, else the first role they listed, else DPS.
 function Inviter.RoleFor(c, state)
+	-- A role they fit that has no invite waiting comes first.
+	for _, role in ipairs(ns.ROLES) do
+		if c.fits and c.fits[role] and not Inviter.pending[role] then
+			return role
+		end
+	end
 	if c.role then
 		return c.role
 	end
@@ -178,9 +180,54 @@ function Inviter.RoleFor(c, state)
 	return "DAMAGER"
 end
 
+-- The + button on a player's row: can it invite them now, and for which role? Returns
+-- ok, role, why-not. Only players who fit your rules get an active button; a role with an invite
+-- waiting keeps the button off until that answer comes back.
+function Inviter.RowInvite(c)
+	if not c or not c.name or c.status == "hidden" then
+		return false, nil, "Their details are hidden by the game."
+	end
+	if c.status == "invited" then
+		return false, c.role, "Invited, waiting for their answer."
+	end
+	if c.status == "ingroup" then
+		return false, nil, "Already in your group."
+	end
+	if not ns.settings.activityID then
+		return false, nil, "Pick a dungeon first."
+	end
+	if not Inviter.CanInvite() then
+		return false, nil, "Only the group leader can invite."
+	end
+	if c.status ~= "match" then
+		return false, nil, (c.reason or "Does not fit your rules") .. ". Click the row to invite anyway."
+	end
+	for _, role in ipairs(ns.ROLES) do
+		if c.fits[role] and not Inviter.pending[role] then
+			return true, role, nil
+		end
+	end
+	local waiting = Inviter.pending[c.role]
+	return false, c.role, ("Waiting for %s's answer as %s first."):format(waiting and waiting.name or "?", ns.ROLE_LABEL[c.role] or "?")
+end
+
+-- A click on the + button: whisper and invite this player, then refresh the list (the click
+-- allows the search).
+function Inviter.InviteFromRow(c)
+	local ok, role, why = Inviter.RowInvite(c)
+	if not ok then
+		return false, why
+	end
+	local sent, message = Inviter.InviteCandidate(c, role, "by hand")
+	if sent then
+		ns.Finder.Refresh(true)
+	end
+	return sent, message
+end
+
 -- Invites this candidate for this role now: the whisper and the invite go out together.
--- Returns ok, message.
-function Inviter.InviteCandidate(c, role)
+-- `source` says who asked, for the log ("by hand", "auto", "round"). Returns ok, message.
+function Inviter.InviteCandidate(c, role, source)
 	if not ns.settings.activityID then
 		return false, "Pick a dungeon first."
 	end
@@ -204,11 +251,16 @@ function Inviter.InviteCandidate(c, role)
 	end
 
 	local whispered = false
+	local whisperNote = "no whisper (turned off)"
 	if ns.settings.whisper then
-		local ok, err = sendWhisper(c.name, Inviter.FormatMessage(c, role))
+		local text = Inviter.FormatMessage(c, role)
+		local ok, err = sendWhisper(c.name, text)
 		whispered = ok
-		if not ok then
+		if ok then
+			whisperNote = ('whispered "%s"'):format(text)
+		else
 			Inviter.lastWhisperError = err
+			whisperNote = "whisper FAILED: " .. tostring(err)
 		end
 	end
 
@@ -216,7 +268,7 @@ function Inviter.InviteCandidate(c, role)
 	if not ok then
 		Inviter.lastInviteError = err
 		ns.asked[c.key] = { name = c.name, outcome = "failed", time = time(), role = role }
-		addLog(c.name .. ": invite failed (" .. err .. ")")
+		addLog(("Invite to %s as %s FAILED: %s"):format(c.name, ns.ROLE_LABEL[role], err))
 		ns.Finder.Evaluate()
 		return false, "The invite failed: " .. err
 	end
@@ -236,7 +288,8 @@ function Inviter.InviteCandidate(c, role)
 	}
 	ns.asked[c.key] = { name = c.name, outcome = "invited", time = time(), role = role }
 	Inviter.invitesSent = Inviter.invitesSent + 1
-	addLog(("%s: invited as %s"):format(c.name, ns.ROLE_LABEL[role]))
+	addLog(("Invited %s (%s %s) as %s (%s); %s"):format(c.name, ns.ClassName(c.class), tostring(c.level),
+		ns.ROLE_LABEL[role], source or "by hand", whisperNote))
 	ns.Print(("Invited %s as %s."):format(describe(c), ns.ROLE_LABEL[role]))
 
 	local timeout = ns.Clamp(ns.settings.timeout, ns.MIN_TIMEOUT, ns.MAX_TIMEOUT)
@@ -251,15 +304,43 @@ function Inviter.InviteCandidate(c, role)
 	return true, ("Invited %s as %s."):format(c.name, ns.ROLE_LABEL[role])
 end
 
+-- "Rules for Deadmines: Tank 1 (17+, Warrior/Druid/Paladin), Healer 1 (17+, any class), ...;
+-- distinct classes off; you are DPS"
+function Inviter.RulesText()
+	local s = ns.settings
+	local parts = {}
+	for _, role in ipairs(ns.ROLES) do
+		local rule = s.roles[role]
+		local classes, count = {}, 0
+		for _, class in ipairs(ns.CLASSES) do
+			if rule.classes[class] then
+				count = count + 1
+				classes[#classes + 1] = ns.ClassName(class)
+			end
+		end
+		local classText = count == #ns.CLASSES and "any class" or (count == 0 and "no class" or table.concat(classes, "/"))
+		parts[#parts + 1] = ("%s %d (%d+, %s)"):format(ns.ROLE_LABEL[role], rule.need, rule.minLevel, classText)
+	end
+	return ("Rules for %s: %s; distinct classes %s; you are %s"):format(s.activityName or "?",
+		table.concat(parts, ", "), s.distinctClasses and "on" or "off", ns.ROLE_LABEL[s.myRole] or "?")
+end
+
 -- The group is complete: say so once and stop auto mode.
 function Inviter.Finish(state)
 	-- A role check may still open a seat again; auto mode then picks up where it stopped.
 	if Inviter.auto then
 		Inviter.autoStoppedAt = GetTime()
+		addLog(("Auto invite OFF (group %s)"):format(state.complete and "complete" or "full"))
 	end
 	Inviter.auto = false
 	if state.complete and not Inviter.announcedComplete then
 		Inviter.announcedComplete = true
+		local members = {}
+		for _, member in ipairs(state.members) do
+			members[#members + 1] = ("%s %s"):format(ns.ROLE_LABEL[member.role], (tostring(member.name):gsub("%-", " ")))
+		end
+		addLog(("Group complete (%d players): you %s, %s"):format(state.size, ns.ROLE_LABEL[ns.settings.myRole] or "?",
+			#members > 0 and table.concat(members, ", ") or "nobody else"))
 		ns.Print("|cff60ff60Your group is complete!|r")
 		if PlaySound and SOUNDKIT and SOUNDKIT.READY_CHECK then
 			pcall(PlaySound, SOUNDKIT.READY_CHECK)
@@ -284,13 +365,20 @@ function Inviter.InviteRound(fromClick)
 		return false, state.complete and "Your group is complete." or "Your group is full."
 	end
 
+	-- The rules in use, logged whenever they changed since the last round.
+	local rules = Inviter.RulesText()
+	if rules ~= Inviter.lastRulesLogged then
+		Inviter.lastRulesLogged = rules
+		addLog(rules)
+	end
+
 	local sent, failures, missing = {}, {}, {}
 	for _, role in ipairs(ns.ROLES) do
 		state = ns.Finder.Evaluate()
 		if not Inviter.pending[role] and state.remaining[role] > 0 and not state.full then
 			local c = ns.Finder.BestFor(role)
 			if c then
-				local ok, message = Inviter.InviteCandidate(c, role)
+				local ok, message = Inviter.InviteCandidate(c, role, Inviter.auto and "auto" or "round")
 				if ok then
 					sent[#sent + 1] = ("%s as %s"):format(c.name, ns.ROLE_LABEL[role])
 				else
@@ -301,6 +389,15 @@ function Inviter.InviteRound(fromClick)
 			end
 		end
 	end
+
+	-- Who could not be found, logged when it changes (auto mode asks the same every few seconds).
+	local missingText = #missing > 0
+		and ("No match for %s among %d players listed alone"):format(table.concat(missing, " or "), #ns.Finder.candidates)
+		or nil
+	if missingText and missingText ~= Inviter.lastMissingLogged then
+		addLog(missingText)
+	end
+	Inviter.lastMissingLogged = missingText
 
 	if #sent > 0 then
 		-- A fresh list for the next answers. From a click this is always allowed.
@@ -395,6 +492,7 @@ function Inviter.Start()
 	end
 	Inviter.auto = true
 	Inviter.announcedComplete = false
+	addLog("Auto invite ON")
 	startRefreshTicker()
 	if not ns.Finder.lastResultsAt or GetTime() - ns.Finder.lastResultsAt > 30 then
 		local ok, message = ns.Finder.Search()
@@ -410,6 +508,9 @@ function Inviter.Start()
 end
 
 function Inviter.Stop()
+	if Inviter.auto then
+		addLog("Auto invite OFF (stopped)")
+	end
 	Inviter.auto = false
 	Inviter.autoStoppedAt = nil -- stopped by you: a role check does not turn it back on
 	Inviter.inviteAfterSearch = false
@@ -465,7 +566,9 @@ function Inviter.Resolve(invite, outcome)
 			Inviter.RequestRoleCheck()
 		end
 	end
-	addLog(("%s: %s"):format(invite.name, Inviter.OUTCOME_LOG[outcome] or outcome))
+	addLog(("%s (%s): %s after %d s%s"):format(invite.name, ns.ROLE_LABEL[invite.role],
+		Inviter.OUTCOME_LOG[outcome] or outcome, math.floor(GetTime() - invite.sentAt),
+		invite.confirmed and "" or " (server never confirmed the invite)"))
 	ns.Print(("%s %s."):format(describe(invite), OUTCOME_PRINT[outcome] or outcome))
 
 	local state = ns.Finder.Evaluate()
@@ -492,7 +595,7 @@ function Inviter.OnJoined(name)
 		record.outcome = "joined"
 		ns.db.memberRoles[key] = { name = name, role = record.role, time = time() }
 		holdSeat(key, name, record.role, nil)
-		addLog(("%s: joined late"):format(name))
+		addLog(("%s joined late (invited as %s, given up earlier)"):format(name, ns.ROLE_LABEL[record.role]))
 		if record.role == "TANK" or record.role == "HEALER" then
 			Inviter.RequestRoleCheck()
 		end
@@ -501,6 +604,7 @@ function Inviter.OnJoined(name)
 		if state.filled[record.role] > need then
 			ns.Print(("|cffff6060%s joined late as %s: you now have more %s than you asked for.|r"):format(
 				name, ns.ROLE_LABEL[record.role], ns.ROLE_LABEL[record.role]))
+			addLog(("Too many %s: %d for %d wanted"):format(ns.ROLE_LABEL[record.role], state.filled[record.role], need))
 		end
 	end
 end
@@ -536,9 +640,11 @@ function Inviter.StartRoleCheck()
 	rc.lastAt = GetTime()
 	rc.result = ok and tostring(result) or ("error: " .. tostring(result))
 	if not ok or result == false then
+		addLog("Role check could not start: " .. rc.result)
 		return false, "The role check could not start (" .. rc.result .. ")."
 	end
-	addLog("role check started")
+	addLog("Role check started (" .. (rc.reason or "by hand") .. ")")
+	rc.reason = nil
 	return true, "Role check started: everyone confirms their role."
 end
 
@@ -593,11 +699,13 @@ function Inviter.CheckUnknownRoles()
 	end
 	lastUnknownSignature = signature
 	Inviter.roleCheck.wanted = true
+	Inviter.roleCheck.reason = ("window opened, unknown role: %s"):format(signature)
 	Inviter.TryRoleCheck(true)
 end
 
 function Inviter.RequestRoleCheck()
 	Inviter.roleCheck.wanted = true
+	Inviter.roleCheck.reason = "a tank or healer joined"
 	C_Timer.After(ROLE_CHECK_FALLBACK, ns.Guard("role check fallback", function()
 		Inviter.TryRoleCheck(true)
 	end))
@@ -618,6 +726,7 @@ function Inviter.AfterRoleChange()
 			Inviter.auto = true
 			Inviter.StartRefreshTicker()
 			ns.Print("A seat opened again after the role check: auto invite is back on.")
+			addLog("Auto invite ON again (a role check reopened a seat)")
 		end
 		Inviter.Continue()
 	end
@@ -636,6 +745,7 @@ function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
 	local me = ns.ReadUnitName("player")
 	if me and ns.SameName(changedName, me) then
 		ns.settings.myRole = newRole
+		addLog(("Role check: you picked %s"):format(ns.ROLE_LABEL[newRole]))
 	else
 		local record, key = ns.Finder.MemberRecord(changedName)
 		if not record then
@@ -650,7 +760,10 @@ function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
 		if invitedFor and invitedFor ~= newRole then
 			ns.Print(("|cffffd100%s picked %s in the role check (invited as %s): the %s seat is open again.|r"):format(
 				changedName, ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[invitedFor], ns.ROLE_LABEL[invitedFor]))
-			addLog(("%s: picked %s, invited as %s"):format(changedName, ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[invitedFor]))
+			addLog(("Role check: %s picked %s but was invited as %s; the %s seat is open again"):format(
+				changedName, ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[invitedFor], ns.ROLE_LABEL[invitedFor]))
+		else
+			addLog(("Role check: %s picked %s"):format(changedName, ns.ROLE_LABEL[newRole]))
 		end
 	end
 
@@ -658,6 +771,7 @@ function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
 	local need = ns.settings.roles[newRole].need
 	if state.filled[newRole] > need then
 		ns.Print(("|cffff6060You now have %d %s for %d wanted.|r"):format(state.filled[newRole], ns.ROLE_LABEL[newRole], need))
+		addLog(("Too many %s: %d for %d wanted"):format(ns.ROLE_LABEL[newRole], state.filled[newRole], need))
 	end
 	Inviter.AfterRoleChange()
 end
@@ -763,6 +877,7 @@ function Inviter.OnRoster()
 	-- A tank or healer who just joined is in the roster now: time for the role check.
 	Inviter.TryRoleCheck()
 	if Inviter.auto and not Inviter.CanInvite() then
+		addLog("You are no longer the group leader")
 		Inviter.Stop()
 		ns.SetStatus("You are no longer the group leader; auto invite is off.")
 	end

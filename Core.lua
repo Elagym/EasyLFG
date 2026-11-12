@@ -24,6 +24,23 @@ ns.ROLE_FLAG = { TANK = "tank", HEALER = "healer", DAMAGER = "dps" }
 -- The nine classes of the Vanilla world. The retail client knows more, but nobody here plays them.
 ns.CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
+-- The classes able to play each role in the Vanilla world, in the order of ns.CLASSES. Only these
+-- can be picked for a role; a hunter can never be wanted as tank or healer.
+ns.ROLE_CLASSES = {
+	TANK = { "WARRIOR", "PALADIN", "DRUID" },
+	HEALER = { "PALADIN", "PRIEST", "SHAMAN", "DRUID" },
+	DAMAGER = ns.CLASSES,
+}
+
+function ns.CanPlay(class, role)
+	for _, allowed in ipairs(ns.ROLE_CLASSES[role] or {}) do
+		if allowed == class then
+			return true
+		end
+	end
+	return false
+end
+
 -- The role in the whisper, as in "... as tank ?".
 ns.ROLE_WORD = { TANK = "tank", HEALER = "healer", DAMAGER = "dps" }
 
@@ -91,6 +108,56 @@ function ns.Clamp(value, low, high)
 	return math.max(low, math.min(high, value))
 end
 
+-- The log ----------------------------------------------------------------------------------
+-- Every action EasyLFG takes, one timestamped line each, kept in the saved variables (the last
+-- LOG_LIMIT lines) so it survives a reload. The same line twice in a row is counted, not repeated.
+-- Lines are plain text, so the log window can be copied as is.
+
+ns.LOG_LIMIT = 500
+local earlyLog = {} -- lines logged before the saved variables are loaded
+
+local function logList()
+	return ns.db and ns.db.log or earlyLog
+end
+
+function ns.Log(text)
+	text = ns.StripCodes and ns.StripCodes(tostring(text)) or tostring(text)
+	local list = logList()
+	local last = list[#list]
+	local now = date("%H:%M:%S")
+	if last and last.text == text then
+		last.count = (last.count or 1) + 1
+		last.last = now
+	else
+		list[#list + 1] = { day = date("%Y-%m-%d"), at = now, text = text }
+		while #list > ns.LOG_LIMIT do
+			table.remove(list, 1)
+		end
+	end
+	if ns.OnLogChanged then
+		ns.OnLogChanged()
+	end
+end
+
+-- One line of the log as text: "12:01:05  Invited Fetto Vandike as Tank (x3, last 12:03:10)".
+function ns.LogLine(entry)
+	local line = entry.at .. "  " .. entry.text
+	if entry.count and entry.count > 1 then
+		line = line .. ("  (x%d, last %s)"):format(entry.count, entry.last or entry.at)
+	end
+	return line
+end
+
+function ns.ClearLog()
+	local list = logList()
+	for i = #list, 1, -1 do
+		list[i] = nil
+	end
+	if ns.OnLogChanged then
+		ns.OnLogChanged()
+	end
+end
+
 -- Runs a handler protected: one error is announced once and kept for /elfg debug, so a client
 -- surprise can never break the rest or spam the chat.
 function ns.Guard(label, fn)
@@ -98,6 +165,7 @@ function ns.Guard(label, fn)
 		local ok, err = pcall(fn, ...)
 		if not ok then
 			ns.lastError = label .. ": " .. tostring(err)
+			ns.Log("Error in " .. ns.lastError)
 			if not ns.errorShown then
 				ns.errorShown = true
 				ns.Print("|cffff6060Something went wrong; /elfg debug has the details.|r")
@@ -254,6 +322,12 @@ function ns.InitDB()
 	-- A group that needs nobody is a leftover of emptied number boxes (fixed in 1.1.0), not a choice.
 	local total = 0
 	for role, defaults in pairs(DEFAULT_SETTINGS.roles) do
+		-- A class that cannot play the role is never wanted for it, whatever was saved.
+		for _, class in ipairs(ns.CLASSES) do
+			if settings.roles[role].classes[class] and not ns.CanPlay(class, role) then
+				settings.roles[role].classes[class] = false
+			end
+		end
 		settings.roles[role].need = ns.Clamp(settings.roles[role].need, 0, ns.MAX_PARTY)
 		settings.roles[role].minLevel = ns.Clamp(settings.roles[role].minLevel, 1, ns.MAX_LEVEL)
 		total = total + settings.roles[role].need
@@ -265,9 +339,21 @@ function ns.InitDB()
 		ns.repairedNeeds = true
 	end
 	db.memberRoles = type(db.memberRoles) == "table" and db.memberRoles or {}
+	db.log = type(db.log) == "table" and db.log or {}
 	ns.db = db
 	ns.settings = settings
 	ns.ForgetOld()
+	if not ns.sessionLogged then
+		ns.sessionLogged = true
+		ns.Log(("=== Session start %s, EasyLFG %s ==="):format(date("%Y-%m-%d"), ns.VERSION))
+		for _, entry in ipairs(earlyLog) do
+			ns.Log(entry.text)
+		end
+		earlyLog = {}
+		if ns.repairedNeeds then
+			ns.Log("Saved needs were 0/0/0: reset to 1 tank, 1 healer, 3 DPS")
+		end
+	end
 end
 
 -- Who was asked and what they answered, for this session only: a player who declined or did not
@@ -325,6 +411,7 @@ local function onBlocked(event, blockedAddon, functionName)
 	end
 	local fn = tostring(functionName)
 	ns.blocked[fn] = (ns.blocked[fn] or 0) + 1
+	ns.Log("The game blocked " .. fn)
 	if ns.blocked[fn] == 1 then
 		ns.Print(("|cffff6060The game blocked %s.|r /elfg debug has the details."):format(fn))
 	end

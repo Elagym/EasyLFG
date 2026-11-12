@@ -292,13 +292,14 @@ local function findFrame(test)
 	end
 end
 local searchButton = findFrame(function(f) return f.kind == "Button" and f.text == "Search" end)
-local inviteButton = findFrame(function(f) return f.kind == "Button" and f.text == "Invite" end)
-report("buttons found", searchButton and inviteButton)
+local autoButton = findFrame(function(f) return f.kind == "Button" and f.text == "Start auto" end)
+report("search and auto buttons found", searchButton and autoButton)
+report("no Invite button any more", not findFrame(function(f) return f.kind == "Button" and f.text == "Invite" end))
 report("no ask-again box", not findFrame(function(f) return f.text == "Ask again after (min)" end))
 local saved = ns.settings.activityID
 ns.settings.activityID = nil
 ns.UI.Refresh()
-report("search button off without dungeon", searchButton.enabled == false and inviteButton.enabled == false)
+report("buttons off without dungeon", searchButton.enabled == false and autoButton.enabled == false)
 ns.settings.activityID = saved
 ns.UI.Refresh()
 report("search button on with dungeon", searchButton.enabled == true)
@@ -312,14 +313,41 @@ if timeoutBox then
 	timeoutBox:ClearFocus()
 end
 -- Class menu
-local classButton = findFrame(function(f) return f.scripts.OnClick and type(f.text) == "string" and f.text:find("Warrior") end)
+local classButton = findFrame(function(f) return f.scripts.OnClick and f.text == "Any tank class" end)
+report("tank classes summed up", classButton ~= nil)
 classButton.scripts.OnClick(classButton)
 local warrior
-for _, item in ipairs(M.menu.items) do if item.kind == "check" and item.data == "WARRIOR" then warrior = item end end
+local tankChecks = {}
+for _, item in ipairs(M.menu.items) do
+	if item.kind == "check" then tankChecks[#tankChecks + 1] = item.data end
+	if item.kind == "check" and item.data == "WARRIOR" then warrior = item end
+end
+report("tank menu: only warrior, paladin, druid", table.concat(tankChecks, ",") == "WARRIOR,PALADIN,DRUID", table.concat(tankChecks, ","))
 report("class menu toggles", warrior and warrior.b(warrior.data) == 2 and ns.settings.roles.TANK.classes.WARRIOR == false)
+ns.UI.Refresh()
+report("summary names the classes left", classButton.text:find("Paladin") and classButton.text:find("Druid") and not classButton.text:find("Warrior"), classButton.text)
 ns.InitDB()
 report("unticked survives reload", ns.settings.roles.TANK.classes.WARRIOR == false)
-ns.settings.roles.TANK.classes.WARRIOR = true
+local allTank
+for _, item in ipairs(M.menu.items) do if item.text == "All tank classes" then allTank = item end end
+allTank.a()
+report("all tank classes: only those three", ns.settings.roles.TANK.classes.WARRIOR and not ns.settings.roles.TANK.classes.HUNTER and not ns.settings.roles.TANK.classes.MAGE)
+local healerButton = findFrame(function(f) return f.scripts.OnClick and f.text == "Any healer class" end)
+healerButton.scripts.OnClick(healerButton)
+local healChecks = {}
+for _, item in ipairs(M.menu.items) do if item.kind == "check" then healChecks[#healChecks + 1] = item.data end end
+report("healer menu: paladin, priest, shaman, druid", table.concat(healChecks, ",") == "PALADIN,PRIEST,SHAMAN,DRUID", table.concat(healChecks, ","))
+local dpsButton = findFrame(function(f) return f.scripts.OnClick and f.text == "Any class" end)
+dpsButton.scripts.OnClick(dpsButton)
+local dpsCount = 0
+for _, item in ipairs(M.menu.items) do if item.kind == "check" then dpsCount = dpsCount + 1 end end
+report("dps menu: all nine classes", dpsCount == 9, dpsCount)
+-- An impossible class in old saved settings is cleared.
+ns.settings.roles.TANK.classes.HUNTER = true
+ns.settings.roles.HEALER.classes.ROGUE = true
+ns.InitDB()
+report("saved hunter tank cleared", ns.settings.roles.TANK.classes.HUNTER == false and ns.settings.roles.HEALER.classes.ROGUE == false)
+report("can-play table", ns.CanPlay("DRUID", "TANK") and not ns.CanPlay("HUNTER", "TANK") and ns.CanPlay("SHAMAN", "HEALER") and not ns.CanPlay("WARRIOR", "HEALER") and ns.CanPlay("HUNTER", "DAMAGER"))
 -- Row menu
 M.ClearListings()
 M.AddListing({ name = "Menu Man", class = "WARLOCK", level = 40, dps = true })
@@ -330,7 +358,7 @@ report("row drawn", row ~= nil)
 row.scripts.OnClick(row)
 local inviteItem, skipItem
 for _, item in ipairs(M.menu.items) do
-	if item.text == "Invite now as DPS" then inviteItem = item end
+	if item.text == "Invite as DPS" then inviteItem = item end
 	if item.text == "Skip this player" then skipItem = item end
 end
 report("row menu names the role", inviteItem ~= nil)
@@ -562,6 +590,148 @@ ns.UI.Refresh()
 report("more than wanted is red", findFrame(function(f) return type(f.text) == "string" and f.text:find("ff6060" .. "3/2") end) ~= nil)
 ns.settings.roles.DAMAGER.need = 3
 report("no errors after window tests", ns.lastError == nil, ns.lastError)
+
+-- 24. The log -------------------------------------------------------------------------------------------
+local function logHas(text)
+	for _, entry in ipairs(EasyLFGDB.log) do
+		if entry.text:find(text, 1, true) then return true end
+	end
+	return false
+end
+local function logShow()
+	local lines = {}
+	for i = math.max(1, #EasyLFGDB.log - 6), #EasyLFGDB.log do lines[#lines + 1] = EasyLFGDB.log[i].text end
+	return table.concat(lines, " | ")
+end
+report("log: session start", logHas("=== Session start"))
+report("log: dungeon set", logHas("Dungeon set: Deadmines (activity 801)"))
+report("log: rules", logHas("Rules for Deadmines: Tank 1 (17+, Warrior/Paladin/Druid)"))
+report("log: invite with whisper text", logHas('Invited Fetto Vandike (Warrior 22) as Tank (round); whispered "Hi, do you wanna join for Deadmines as tank ?"'))
+report("log: decline with timing", logHas("Fetto Vandike (Tank): declined after"))
+report("log: join", logHas("Garlick Naan (Healer): joined after"))
+report("log: no answer", logHas("Rogue Two (DPS): no answer after 90 s"))
+report("log: busy", logHas("Norole Mage (DPS): already in a group"))
+report("log: nobody matches", logHas("No match for Tank"))
+report("log: click refresh", logHas("List refreshed (your click)"))
+report("log: automatic refresh", logHas("List refreshed (automatic)"))
+report("log: refresh by Blizzard's window", logHas("List refreshed (Blizzard's window or another addon)"))
+report("log: search without answer", logHas("got no answer within 10 s"))
+report("log: automatic searches refused", logHas("Automatic searches refused"))
+report("log: blocked", logHas("The game blocked C_LFGList.Search()"))
+report("log: invite failure", logHas("Invite to Fail Guy as Tank FAILED"))
+report("log: auto on/off", logHas("Auto invite ON") and logHas("Auto invite OFF (stopped)") and logHas("Auto invite OFF (group complete)"))
+report("log: group complete with members", logHas("Group complete (5 players): you DPS") and logHas("Healer Bear Tank"))
+report("log: role check started", logHas("Role check started (a tank or healer joined)"))
+report("log: role check by hand", logHas("Role check started (by hand)"))
+report("log: role check on open", logHas("Role check started (window opened, unknown role: who-knows)"))
+report("log: role answer differs", logHas("Role check: Bear Tank picked Healer but was invited as Tank; the Tank seat is open again"))
+report("log: too many", logHas("Too many Healer: 2 for 1 wanted"))
+report("log: auto back on", logHas("Auto invite ON again (a role check reopened a seat)"))
+report("log: skip by hand", logHas("Skipped Menu Man by hand"))
+report("log: forget", logHas("Forgot every answer and skip"))
+local colored = false
+for _, entry in ipairs(EasyLFGDB.log) do if entry.text:find("|c", 1, true) then colored = true end end
+report("log: plain text, no colour codes", not colored)
+
+-- Repeats are counted, errors logged, the size capped.
+local before = #EasyLFGDB.log
+ns.Log("Same thing")
+ns.Log("Same thing")
+ns.Log("Same thing")
+report("log: repeats counted", #EasyLFGDB.log == before + 1 and EasyLFGDB.log[#EasyLFGDB.log].count == 3, logShow())
+report("log line shows the count", ns.LogLine(EasyLFGDB.log[#EasyLFGDB.log]):find("(x3, last", 1, true))
+ns.Guard("test handler", function() error("kaboom") end)()
+report("log: errors", logHas("Error in test handler") and logHas("kaboom"))
+ns.lastError = nil
+for i = 1, 600 do ns.Log("filler " .. i) end
+report("log: capped at 500", #EasyLFGDB.log == 500 and EasyLFGDB.log[500].text == "filler 600")
+
+-- The window.
+local logButton = findFrame(function(f) return f.kind == "Button" and f.text == "Log" end)
+report("Log button in the main window", logButton ~= nil)
+logButton.scripts.OnClick(logButton)
+report("log window opens", ns.LogWindow.IsShown())
+report("log window shows the lines", ns.LogWindow.Text():find("filler 600", 1, true) ~= nil)
+local logEdit = findFrame(function(f) return f.kind == "EditBox" and type(f.text) == "string" and f.text:find("filler 600", 1, true) end)
+report("log text box found", logEdit ~= nil)
+logEdit.text = "typed over"
+logEdit.scripts.OnTextChanged(logEdit, true)
+report("log is read only", logEdit.text:find("filler 600", 1, true) ~= nil)
+ns.Log("A new line")
+M.Advance(1)
+report("open window follows new lines", ns.LogWindow.Text():find("A new line", 1, true) ~= nil)
+local clearButton = findFrame(function(f) return f.kind == "Button" and f.text == "Clear" end)
+clearButton.scripts.OnClick(clearButton)
+report("clear empties the log", #EasyLFGDB.log == 1 and EasyLFGDB.log[1].text == "Log cleared")
+SlashCmdList.EASYLFG("log")
+report("/elfg log toggles", not ns.LogWindow.IsShown())
+report("no errors after log tests", ns.lastError == nil, ns.lastError)
+
+-- 25. The + button on each row ---------------------------------------------------------------------------
+Inviter.Stop()
+wipe(Inviter.pending)
+wipe(Inviter.joining)
+wipe(ns.asked)
+wipe(EasyLFGDB.memberRoles)
+wipe(Finder.skipped)
+M.party = {}
+M.leader = true
+ns.settings.myRole = "DAMAGER"
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need, ns.settings.roles.DAMAGER.need = 1, 1, 3
+ns.settings.distinctClasses = false
+Finder.searchNeedsClick = false
+Finder.searching = false
+M.ClearListings()
+M.AddListing({ name = "Plus Tank", class = "WARRIOR", level = 30, tank = true })
+M.AddListing({ name = "Other Tank", class = "PALADIN", level = 31, tank = true })
+M.AddListing({ name = "Plus Dps", class = "ROGUE", level = 30, dps = true })
+M.AddListing({ name = "Low Dps", class = "MAGE", level = 5, dps = true })
+M.AddListing({ name = "Flex Druid", class = "DRUID", level = 32, tank = true, dps = true })
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+EasyLFGFrame:Show()
+ns.UI.Refresh()
+local function rowOf(name)
+	return findFrame(function(f) return rawget(f, "candidate") and f.candidate.name == name and f.shown end)
+end
+local plusTankRow, lowRow = rowOf("Plus Tank"), rowOf("Low Dps")
+report("rows have a + button", plusTankRow and plusTankRow.invite ~= nil)
+report("+ on for a matching player", plusTankRow.invite.enabled == true and plusTankRow.invite.role == "TANK")
+report("+ off for a player outside the rules", lowRow.invite.enabled == false and lowRow.invite.why:find("level 5") and lowRow.invite.why:find("invite anyway"), lowRow.invite.why)
+report("disabled + is dimmed", lowRow.invite.alpha < 1)
+plusTankRow.invite.scripts.OnEnter(plusTankRow.invite)
+report("+ tooltip without errors", ns.lastError == nil, ns.lastError)
+
+M.Advance(20)
+searches = #M.searches
+local whispersBefore = #M.whispers
+plusTankRow.invite.scripts.OnClick(plusTankRow.invite)
+report("+ invites the player", Inviter.pending.TANK and Inviter.pending.TANK.name == "Plus Tank")
+report("+ sends the whisper with the role", #M.whispers == whispersBefore + 1 and M.whispers[#M.whispers].target == "Plus Tank" and M.whispers[#M.whispers].text:find("as tank"))
+report("+ refreshes the list", #M.searches == searches + 1 and Finder.searchFromClick == true)
+report("+ logged as by hand", logHas("Invited Plus Tank (Warrior 30) as Tank (by hand)"))
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+ns.UI.Refresh()
+report("other tanks: + off once a tank is invited", rowOf("Other Tank").invite.enabled == false and rowOf("Other Tank").invite.why:find("no Tank needed"), rowOf("Other Tank").invite.why)
+report("invited player: + off", rowOf("Plus Tank").invite.enabled == false and rowOf("Plus Tank").invite.why:find("waiting"))
+local flexRow = rowOf("Flex Druid")
+report("flexible player offered as dps instead", flexRow.invite.enabled == true and flexRow.invite.role == "DAMAGER", flexRow.invite.role)
+flexRow.invite.scripts.OnClick(flexRow.invite)
+report("flexible player invited as dps", Inviter.pending.DAMAGER and Inviter.pending.DAMAGER.name == "Flex Druid" and M.whispers[#M.whispers].text:find("as dps"))
+ns.UI.Refresh()
+local plusDpsRow = rowOf("Plus Dps")
+report("one dps waiting: other dps + off", plusDpsRow.invite.enabled == false and plusDpsRow.invite.why:find("Waiting for Flex Druid's answer as DPS"), plusDpsRow.invite.why)
+plusDpsRow.invite.scripts.OnClick(plusDpsRow.invite)
+report("clicking a disabled + sends nothing", Inviter.pending.DAMAGER.name == "Flex Druid")
+M.Fire("CHAT_MSG_SYSTEM", "Flex Druid declines your group invitation.")
+ns.UI.Refresh()
+report("answer back: dps + on again", rowOf("Plus Dps").invite.enabled == true)
+M.Join("Some", "Body", "PRIEST", "NONE")
+M.leader = false
+ns.UI.Refresh()
+report("not the leader: + off", rowOf("Plus Dps").invite.enabled == false and rowOf("Plus Dps").invite.why:find("leader"))
+M.leader = true
+M.party = {}
+report("no errors after + tests", ns.lastError == nil, ns.lastError)
 
 out(("%d passed, %d failed"):format(passed, failed))
 if failed > 0 then

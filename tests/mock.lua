@@ -43,11 +43,14 @@ function FrameMethods.IsEnabled(self) return self.enabled ~= false end
 function FrameMethods.GetPoint() return "CENTER", nil, "CENTER", 0, 0 end
 function FrameMethods.GetWidth() return 100 end
 function FrameMethods.GetHeight() return 20 end
-function FrameMethods.CreateFontString(self) return M.NewFrame("FontString") end
-function FrameMethods.CreateTexture(self) return M.NewFrame("Texture") end
+function FrameMethods.CreateFontString(self) return M.NewFrame("FontString", nil, self) end
+function FrameMethods.CreateTexture(self) return M.NewFrame("Texture", nil, self) end
+function FrameMethods.GetParent(self) return rawget(self, "parent") end
+function FrameMethods.GetFrameLevel() return 1 end
+function FrameMethods.SetAlpha(self, a) self.alpha = a end
 
-function M.NewFrame(kind, name)
-	local f = setmetatable({ kind = kind, scripts = {}, events = {}, shown = true, text = "" }, FrameMethods)
+function M.NewFrame(kind, name, parent)
+	local f = setmetatable({ kind = kind, scripts = {}, events = {}, shown = true, text = "", parent = parent }, FrameMethods)
 	if name then _G[name] = f end
 	table.insert(M.frames, f)
 	return f
@@ -76,7 +79,7 @@ end
 
 -- Install globals ---------------------------------------------------------------------------
 function M.Install()
-	_G.CreateFrame = function(kind, name) return M.NewFrame(kind, name) end
+	_G.CreateFrame = function(kind, name, parent) return M.NewFrame(kind, name, parent) end
 	_G.UIParent = M.NewFrame("Frame")
 	_G.DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) table.insert(M.prints, msg) end }
 	_G.print = function(...) local parts = {} for i = 1, select("#", ...) do parts[#parts + 1] = tostring(select(i, ...)) end table.insert(M.prints, table.concat(parts, " ")) end
@@ -215,7 +218,7 @@ end
 
 function M.Load(dir)
 	local ns = {}
-	for _, file in ipairs({ "Core.lua", "Finder.lua", "Inviter.lua", "UI.lua", "Slash.lua" }) do
+	for _, file in ipairs({ "Core.lua", "Finder.lua", "Inviter.lua", "UI.lua", "LogWindow.lua", "Slash.lua" }) do
 		local chunk = assert(loadfile(dir .. "/" .. file))
 		chunk("EasyLFG", ns)
 	end

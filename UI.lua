@@ -193,7 +193,8 @@ local function openClassMenu(owner, role)
 	openMenu(owner, function(_, root)
 		local rule = ns.settings.roles[role]
 		root:CreateTitle(("Classes wanted as %s"):format(ns.ROLE_LABEL[role]))
-		for _, class in ipairs(ns.CLASSES) do
+		-- Only the classes able to play this role.
+		for _, class in ipairs(ns.ROLE_CLASSES[role]) do
 			root:CreateCheckbox(ns.Colored(ns.ClassName(class), class), function(value)
 				return rule.classes[value] == true
 			end, function(value)
@@ -206,8 +207,8 @@ local function openClassMenu(owner, role)
 		if root.CreateDivider then
 			root:CreateDivider()
 		end
-		root:CreateButton("All classes", function()
-			for _, class in ipairs(ns.CLASSES) do
+		root:CreateButton(role == "DAMAGER" and "All classes" or ("All %s classes"):format(ns.ROLE_WORD[role]), function()
+			for _, class in ipairs(ns.ROLE_CLASSES[role]) do
 				rule.classes[class] = true
 			end
 			ns.Finder.Evaluate()
@@ -229,8 +230,13 @@ local function openRowMenu(owner, c)
 		root:CreateTitle(c.name or "?")
 		local state = ns.Finder.state or ns.Finder.GroupState()
 		local role = ns.Inviter.RoleFor(c, state)
-		local invite = root:CreateButton(("Invite now as %s"):format(ns.ROLE_LABEL[role]), function()
-			local _, message = ns.Inviter.InviteCandidate(c, role)
+		local fits = c.status == "match"
+		local label = fits and "Invite as %s" or "Invite anyway as %s"
+		local invite = root:CreateButton(label:format(ns.ROLE_LABEL[role]), function()
+			local ok, message = ns.Inviter.InviteCandidate(c, role, fits and "by hand" or "by hand, outside the rules")
+			if ok then
+				ns.Finder.Refresh(true)
+			end
 			ns.SetStatus(message)
 		end)
 		if invite.SetEnabled then
@@ -252,6 +258,7 @@ local function openRowMenu(owner, c)
 		elseif c.key then
 			root:CreateButton("Skip this player", function()
 				ns.Finder.skipped[c.key] = true
+				ns.Log(("Skipped %s by hand"):format(c.name))
 				ns.Finder.Evaluate()
 				ns.Refresh()
 			end)
@@ -259,6 +266,7 @@ local function openRowMenu(owner, c)
 		if c.key and ns.Finder.AskedRecord(c.key) then
 			root:CreateButton("Forget their answer", function()
 				ns.asked[c.key] = nil
+				ns.Log(("Forgot %s's answer by hand"):format(c.name))
 				ns.Finder.Evaluate()
 				ns.Refresh()
 			end)
@@ -268,9 +276,10 @@ end
 
 -- Building ------------------------------------------------------------------------------------
 
-local function classSummary(rule)
+local function classSummary(rule, role)
+	local allowed = ns.ROLE_CLASSES[role]
 	local names, count = {}, 0
-	for _, class in ipairs(ns.CLASSES) do
+	for _, class in ipairs(allowed) do
 		if rule.classes[class] then
 			count = count + 1
 			names[#names + 1] = ns.Colored(ns.ClassName(class), class)
@@ -278,8 +287,8 @@ local function classSummary(rule)
 	end
 	if count == 0 then
 		return "|cffff6060No class|r"
-	elseif count == #ns.CLASSES then
-		return "Any class"
+	elseif count == #allowed then
+		return role == "DAMAGER" and "Any class" or ("Any %s class"):format(ns.ROLE_WORD[role])
 	elseif count <= 3 then
 		return table.concat(names, ", ")
 	end
@@ -386,15 +395,9 @@ local function buildActions()
 		ns.SetStatus(message)
 	end))
 
-	widgets.next = newButton(frame, "Invite", 110)
-	widgets.next:SetPoint("LEFT", widgets.search, "RIGHT", 8, 0)
-	widgets.next:SetScript("OnClick", ns.Guard("invite round", function()
-		local _, message = ns.Inviter.InviteRound(true)
-		ns.SetStatus(message)
-	end))
-
+	-- Inviting by hand is the + button on each player's row.
 	widgets.auto = newButton(frame, "Start auto", 110)
-	widgets.auto:SetPoint("LEFT", widgets.next, "RIGHT", 8, 0)
+	widgets.auto:SetPoint("LEFT", widgets.search, "RIGHT", 8, 0)
 	widgets.auto:SetScript("OnClick", ns.Guard("auto", function()
 		local _, message
 		if ns.Inviter.auto then
@@ -428,18 +431,57 @@ local function createRow(content, index)
 	row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 
+	-- The + button: whisper and invite this player now.
+	local invite = CreateFrame("Button", nil, row)
+	invite:SetSize(16, 16)
+	invite:SetPoint("LEFT", row, "LEFT", 4, 0)
+	invite:SetFrameLevel(row:GetFrameLevel() + 2)
+	invite:SetNormalTexture("Interface\\Buttons\\UI-PlusButton-Up")
+	invite:SetPushedTexture("Interface\\Buttons\\UI-PlusButton-Down")
+	invite:SetDisabledTexture("Interface\\Buttons\\UI-PlusButton-Disabled")
+	invite:SetHighlightTexture("Interface\\Buttons\\UI-PlusButton-Hilight", "ADD")
+	invite:SetScript("OnClick", ns.Guard("row invite", function(self)
+		local c = self:GetParent().candidate
+		if c then
+			local _, message = ns.Inviter.InviteFromRow(c)
+			ns.SetStatus(message)
+		end
+	end))
+	-- Shown on a disabled button too, so you can see why it is off.
+	invite:SetMotionScriptsWhileDisabled(true)
+	invite:SetScript("OnEnter", function(self)
+		local c = self:GetParent().candidate
+		if not c then
+			return
+		end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if self:IsEnabled() then
+			GameTooltip:AddLine(("Invite %s as %s"):format(c.name, ns.ROLE_LABEL[self.role] or "?"), 1, 1, 1)
+			if ns.settings.whisper then
+				GameTooltip:AddLine(('Whisper: "%s"'):format(ns.Inviter.FormatMessage(c, self.role)), 0.7, 0.9, 1, true)
+			end
+		else
+			GameTooltip:AddLine(self.why or "Cannot invite now.", 1, 0.6, 0.4, true)
+		end
+		GameTooltip:Show()
+	end)
+	invite:SetScript("OnLeave", function()
+		GameTooltip:Hide()
+	end)
+	row.invite = invite
+
 	row.name = newLabel(row, "", "GameFontHighlightSmall")
-	row.name:SetPoint("LEFT", row, "LEFT", 6, 0)
-	row.name:SetWidth(150)
+	row.name:SetPoint("LEFT", row, "LEFT", 26, 0)
+	row.name:SetWidth(140)
 	row.name:SetWordWrap(false)
 	row.level = newLabel(row, "", "GameFontHighlightSmall")
-	row.level:SetPoint("LEFT", row, "LEFT", 160, 0)
+	row.level:SetPoint("LEFT", row, "LEFT", 170, 0)
 	row.level:SetWidth(28)
 	row.roles = newLabel(row, "", "GameFontHighlightSmall")
-	row.roles:SetPoint("LEFT", row, "LEFT", 192, 0)
+	row.roles:SetPoint("LEFT", row, "LEFT", 202, 0)
 	row.roles:SetWidth(56)
 	row.reason = newLabel(row, "", "GameFontHighlightSmall")
-	row.reason:SetPoint("LEFT", row, "LEFT", 252, 0)
+	row.reason:SetPoint("LEFT", row, "LEFT", 262, 0)
 	row.reason:SetPoint("RIGHT", row, "RIGHT", -4, 0)
 	row.reason:SetWordWrap(false)
 
@@ -465,7 +507,7 @@ local function createRow(content, index)
 			GameTooltip:AddLine(c.comment, 0.9, 0.9, 0.6, true)
 		end
 		GameTooltip:AddLine(c.reason or "", 0.6, 0.8, 1, true)
-		GameTooltip:AddLine("Click for options.", 0.5, 0.5, 0.5)
+		GameTooltip:AddLine("+ invites. Click the row for more options.", 0.5, 0.5, 0.5)
 		GameTooltip:Show()
 	end)
 	row:SetScript("OnLeave", function()
@@ -479,7 +521,7 @@ local function buildList()
 	panel:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, LIST_TOP)
 	panel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 14)
 
-	local headers = { { "Player", 10 }, { "Lvl", 164 }, { "Roles", 196 }, { "Status", 256 } }
+	local headers = { { "Player", 30 }, { "Lvl", 174 }, { "Roles", 206 }, { "Status", 266 } }
 	for _, header in ipairs(headers) do
 		local label = newLabel(panel, header[1], "GameFontNormalSmall")
 		label:SetPoint("TOPLEFT", panel, "TOPLEFT", header[2], -8)
@@ -543,6 +585,13 @@ local function build()
 
 	local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 	close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -3, -3)
+
+	local logButton = newButton(frame, "Log", 60)
+	logButton:SetPoint("RIGHT", close, "LEFT", -4, 0)
+	logButton:SetScript("OnClick", function()
+		ns.LogWindow.Toggle()
+	end)
+	widgets.log = logButton
 
 	buildSettings()
 	buildActions()
@@ -630,6 +679,10 @@ local function refreshList()
 		row.level:SetText(c.level and tostring(c.level) or "?")
 		row.roles:SetText(rolesText(c.roles))
 		row.reason:SetText((STATUS_COLOR[c.status] or "|cffffffff") .. (c.reason or "") .. "|r")
+		local canInvite, role, why = ns.Inviter.RowInvite(c)
+		row.invite:SetEnabled(canInvite)
+		row.invite:SetAlpha(canInvite and 1 or 0.35)
+		row.invite.role, row.invite.why = role, why
 		row:Show()
 	end
 	for index = #list + 1, #widgets.rows do
@@ -676,7 +729,7 @@ function UI.Refresh()
 		if not row.level:HasFocus() then
 			row.level:load()
 		end
-		row.classes:SetText(classSummary(s.roles[role]))
+		row.classes:SetText(classSummary(s.roles[role], role))
 	end
 	if not widgets.timeout:HasFocus() then
 		widgets.timeout:load()
@@ -688,7 +741,6 @@ function UI.Refresh()
 	end
 	-- No dungeon, no search and no invite.
 	local hasDungeon = s.activityID ~= nil
-	widgets.next:SetEnabled(hasDungeon)
 	widgets.auto:SetEnabled(hasDungeon or ns.Inviter.auto)
 	widgets.search:SetEnabled(hasDungeon and not ns.Finder.searching)
 	widgets.auto:SetText(ns.Inviter.auto and "Stop auto" or "Start auto")

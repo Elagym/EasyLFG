@@ -135,8 +135,9 @@ local function printDebug()
 	end
 	print(("  Blocked by the game: %s"):format(#blocked > 0 and table.concat(blocked, ", ") or "nothing"))
 	print(("  Last error: %s"):format(tostring(ns.lastError)))
-	for i = 1, math.min(5, #Inviter.log) do
-		print(("  log %s %s"):format(Inviter.log[i].at, Inviter.log[i].text))
+	local log = ns.db.log
+	for i = math.max(1, #log - 4), #log do
+		print("  log " .. ns.LogLine(log[i]))
 	end
 end
 
@@ -150,6 +151,7 @@ local function help()
 	print("  /elfg start | stop - auto invite on or off")
 	print("  /elfg rolecheck - ask the group to confirm their roles")
 	print("  /elfg forget - forget who declined or did not answer")
+	print("  /elfg log - show what EasyLFG did")
 	print("  /elfg debug - what the game allows, and what happened")
 	print("Key bindings: Options > Key Bindings > AddOns > EasyLFG.")
 end
@@ -176,6 +178,7 @@ local function handle(input)
 		ns.Print(message)
 	elseif command == "forget" or command == "reset" then
 		wipe(ns.asked)
+		ns.Log("Forgot every answer and skip (/elfg forget)")
 		wipe(ns.Finder.skipped)
 		ns.Finder.Evaluate()
 		say("Forgot every answer and skip; everyone can be asked again.")
@@ -183,6 +186,8 @@ local function handle(input)
 		local _, message = ns.Inviter.StartRoleCheck()
 		ns.SetStatus(message)
 		ns.Print(message)
+	elseif command == "log" then
+		ns.LogWindow.Toggle()
 	elseif command == "debug" then
 		printDebug()
 	else
