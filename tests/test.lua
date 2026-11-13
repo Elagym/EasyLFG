@@ -900,6 +900,113 @@ M.party = {}
 M.Fire("GROUP_ROSTER_UPDATE")
 report("no errors after panel tests", ns.lastError == nil, ns.lastError)
 
+-- 27. Demo: made-up players, nothing sent to the game -------------------------------------------------
+Inviter.Stop()
+wipe(Inviter.pending)
+wipe(Inviter.joining)
+M.party = {}
+M.Fire("GROUP_ROSTER_UPDATE")
+ns.settings.myRole = "DAMAGER"
+ns.settings.distinctClasses = false
+for _, role in ipairs(ns.ROLES) do
+	for _, class in ipairs(ns.ROLE_CLASSES[role]) do
+		ns.settings.roles[role].classes[class] = true
+	end
+end
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need, ns.settings.roles.DAMAGER.need = 1, 1, 3
+-- Real data the demo must leave alone.
+wipe(ns.asked)
+ns.asked["real-guy"] = { name = "Real Guy", outcome = "declined", time = time() }
+EasyLFGDB.memberRoles["real-tank"] = { name = "Real Tank", role = "TANK", time = time() }
+Finder.searchNeedsClick = true
+local realGame = {}
+for key, fn in pairs(ns.Game) do realGame[key] = fn end
+local sent = { invites = #M.invites, whispers = #M.whispers, searches = #M.searches, polls = M.rolePolls }
+local function nothingReal()
+	return #M.invites == sent.invites and #M.whispers == sent.whispers and #M.searches == sent.searches and M.rolePolls == sent.polls
+end
+
+-- No Demo button in the main window: only /elfg demo opens the demo window.
+EasyLFGFrame:Show()
+ns.UI.Refresh()
+report("no demo button in the main window", findFrame(function(f) return f.kind == "Button" and (f.text == "Demo" or f.text == "End demo") end) == nil)
+
+-- Without a dungeon the demo window opens and asks for one.
+local savedActivity = ns.settings.activityID
+ns.settings.activityID = nil
+SlashCmdList.EASYLFG("demo")
+report("demo window without a dungeon asks for one", ns.Demo.active and #ns.Demo.pool == 0 and ns.status:find("pick a dungeon"), ns.status)
+SlashCmdList.EASYLFG("demo")
+report("demo window closed again", not ns.Demo.active and not EasyLFGDemoFrame.shown)
+ns.settings.activityID = savedActivity
+
+math.randomseed(7)
+ns.Demo.script = { "declined", "joined", "busy", "joined", "slow", "joined", "joined", "joined", "joined", "joined", "joined" }
+EasyLFGFrame:Show()
+SlashCmdList.EASYLFG("demo")
+report("demo started", ns.Demo.active and #ns.Demo.pool == 14, #ns.Demo.pool)
+report("demo window open, main window closed", EasyLFGDemoFrame.shown and not EasyLFGFrame.shown)
+report("demo starts fresh", ns.asked["real-guy"] == nil and EasyLFGDB.memberRoles["real-tank"] == nil and not Finder.searchNeedsClick)
+ns.UI.Refresh()
+report("demo banner in the demo window", findFrame(function(f) return type(f.text) == "string" and f.text:find("nothing is sent to the game", 1, true) end) ~= nil)
+M.Advance(1)
+report("demo search lists the made-up players", #Finder.candidates == 14, #Finder.candidates)
+report("list title says demo", findFrame(function(f) return type(f.text) == "string" and f.text:find("Made-up players listed alone (demo)", 1, true) end) ~= nil)
+report("chat marked demo", M.PrintsContain("[demo]"))
+
+ok, msg = Inviter.Start()
+report("demo auto starts", Inviter.auto == true, msg)
+report("demo invite goes to a made-up tank", Inviter.pending.TANK ~= nil)
+local panelSeen = false
+for _ = 1, 150 do
+	M.Advance(1)
+	if not panelSeen and findFrame(function(f) return type(f.text) == "string" and f.text:find("joining", 1, true) end) then
+		panelSeen = true
+	end
+end
+state = Finder.Evaluate()
+report("demo group complete", state.complete and state.size == 5 and #ns.Demo.roster == 4, state.size)
+report("demo auto off when complete", Inviter.auto == false)
+report("demo role check once full, answered by the made-up players", Inviter.roleCheck.started == 1 and Inviter.roleCheck.answers >= 1, Inviter.roleCheck.answers)
+report("demo declines and busy answers handled", logHas("[demo]") and logHas("declined after") and logHas("already in a group"))
+report("demo invites logged with the whisper", logHas('[demo] Invited') and logHas("as tank ?"))
+report("demo group panel used", findFrame(function(f) return type(f.text) == "string" and f.text:find("Group 5/5", 1, true) and f.text:find("demo", 1, true) end) ~= nil)
+report("nothing real sent during the demo", nothingReal(), ("%d %d %d %d"):format(#M.invites - sent.invites, #M.whispers - sent.whispers, #M.searches - sent.searches, M.rolePolls - sent.polls))
+report("no errors in the demo", ns.lastError == nil, ns.lastError)
+
+SlashCmdList.EASYLFG("demo")
+report("demo ended", not ns.Demo.active and not EasyLFGDemoFrame.shown and M.PrintsContain("Demo ended"))
+report("real answers back", ns.asked["real-guy"] ~= nil and EasyLFGDB.memberRoles["real-tank"] ~= nil and Finder.searchNeedsClick == true)
+local allReal = true
+for key, fn in pairs(realGame) do if ns.Game[key] ~= fn then allReal = false end end
+report("game calls are real again", allReal)
+report("pretend group gone", #Finder.GroupUnits() == 0 and Finder.Evaluate().size == 1)
+report("demo players gone from the list", #Finder.candidates == 0 or not Finder.FindCandidate(ns.Demo.roster[1] and ns.Demo.roster[1].name or "x"))
+M.Advance(120) -- timers left over from the demo do nothing now
+report("nothing real after the demo either", nothingReal() and ns.lastError == nil, ns.lastError)
+
+-- Escape (or the close button) on the demo window ends the demo.
+SlashCmdList.EASYLFG("demo")
+report("demo running again", ns.Demo.active and EasyLFGDemoFrame.shown)
+EasyLFGDemoFrame:Hide()
+report("closing the demo window ends the demo", not ns.Demo.active and EasyLFGDB.memberRoles["real-tank"] ~= nil)
+-- Opening the main window closes the demo window, and so ends the demo.
+SlashCmdList.EASYLFG("demo")
+SlashCmdList.EASYLFG("")
+report("main window ends the demo", not ns.Demo.active and not EasyLFGDemoFrame.shown and EasyLFGFrame.shown)
+EasyLFGFrame:Hide()
+-- A logout or /reload during the demo saves the real data, and closes the demo window.
+SlashCmdList.EASYLFG("demo")
+M.Fire("PLAYER_LOGOUT")
+report("logout ends the demo with the real data back", not ns.Demo.active and not EasyLFGDemoFrame.shown and EasyLFGDB.memberRoles["real-tank"] ~= nil)
+-- Not while a real invite waits.
+Inviter.pending.HEALER = { name = "Real Heal", role = "HEALER", key = "real-heal", sentAt = GetTime(), token = -1 }
+ok, msg = ns.UI.ToggleDemo()
+report("no demo while a real invite waits", not ok and msg:find("Real Heal") and not EasyLFGDemoFrame.shown, msg)
+wipe(Inviter.pending)
+EasyLFGFrame:Hide()
+report("no errors after demo tests", ns.lastError == nil, ns.lastError)
+
 out(("%d passed, %d failed"):format(passed, failed))
 if failed > 0 then
 	for i = math.max(1, #M.prints - 12), #M.prints do out("  chat: " .. tostring(M.prints[i])) end

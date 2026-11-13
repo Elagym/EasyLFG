@@ -133,21 +133,7 @@ end
 
 -- The units of the other group members.
 function Finder.GroupUnits()
-	local units = {}
-	if IsInRaid and ns.Readable(IsInRaid()) then
-		for i = 1, (GetNumGroupMembers() or 0) do
-			local unit = "raid" .. i
-			if not ns.Readable(UnitIsUnit(unit, "player")) then
-				units[#units + 1] = unit
-			end
-		end
-	else
-		local count = GetNumSubgroupMembers and GetNumSubgroupMembers() or 0
-		for i = 1, (ns.Readable(count) or 0) do
-			units[#units + 1] = "party" .. i
-		end
-	end
-	return units
+	return ns.Game.GroupUnits()
 end
 
 -- What EasyLFG knows about a member: { role = invited for, chosen = picked in a role check }.
@@ -170,10 +156,7 @@ end
 
 -- The role the game shows for a unit after a role check, or nil.
 function Finder.AssignedRole(unit)
-	if not UnitGroupRolesAssigned then
-		return nil
-	end
-	local assigned = ns.Readable(UnitGroupRolesAssigned(unit))
+	local assigned = ns.Game.AssignedRole(unit)
 	return ns.ROLE_LABEL[assigned] and assigned or nil
 end
 
@@ -211,7 +194,7 @@ function Finder.GroupState()
 	-- DPS by default. Only the EasyLFG window changes "I am", never a role check answer.
 	local myRole = ns.ROLE_LABEL[s.myRole] and s.myRole or "DAMAGER"
 	state.filled[myRole] = state.filled[myRole] + 1
-	local myClass = ns.Readable((select(2, UnitClass("player"))))
+	local myClass = ns.Game.UnitClass("player")
 	if myClass then
 		state.classes[myClass] = true
 	end
@@ -219,7 +202,7 @@ function Finder.GroupState()
 	for _, unit in ipairs(Finder.GroupUnits()) do
 		state.size = state.size + 1
 		local name = ns.ReadUnitName(unit)
-		local class = ns.Readable((select(2, UnitClass(unit))))
+		local class = ns.Game.UnitClass(unit)
 		if class then
 			state.classes[class] = true
 		end
@@ -279,28 +262,10 @@ end
 
 -- Search results ---------------------------------------------------------------------------
 
-local function readPlayer(resultID)
-	for _, getter in ipairs({ "GetSearchResultPlayerInfo", "GetSearchResultLeaderInfo" }) do
-		local fn = C_LFGList[getter]
-		if fn then
-			local ok, player
-			if getter == "GetSearchResultPlayerInfo" then
-				ok, player = pcall(fn, resultID, 1)
-			else
-				ok, player = pcall(fn, resultID)
-			end
-			if ok and type(player) == "table" then
-				return player
-			end
-		end
-	end
-	return nil
-end
-
 -- One listing as a candidate, or nil when it cannot be read at all.
 function Finder.ReadResult(resultID)
-	local ok, info = pcall(C_LFGList.GetSearchResultInfo, resultID)
-	if not ok or type(info) ~= "table" then
+	local info = ns.Game.ResultInfo(resultID)
+	if not info then
 		return nil
 	end
 	local c = {
@@ -325,7 +290,7 @@ function Finder.ReadResult(resultID)
 
 	-- Blizzard invites leaderName, so that spelling is the one to use.
 	local name = ns.Readable(info.leaderName)
-	local player = readPlayer(resultID)
+	local player = ns.Game.ResultPlayer(resultID)
 	if player then
 		if type(name) ~= "string" or name == "" then
 			name = ns.Readable(player.name)
@@ -502,9 +467,9 @@ function Finder.Scan()
 	local list, seen = {}, {}
 	local stats = { results = 0, solo = 0, groups = 0, hidden = 0, otherActivity = 0, eligible = 0 }
 	local activityID = ns.settings.activityID
-	if activityID and C_LFGList and C_LFGList.GetSearchResults then
-		local ok, _, results = pcall(C_LFGList.GetSearchResults)
-		if ok and type(results) == "table" then
+	if activityID then
+		local results = ns.Game.SearchResults()
+		if results then
 			for _, resultID in ipairs(results) do
 				stats.results = stats.results + 1
 				local c = Finder.ReadResult(resultID)
@@ -599,7 +564,7 @@ function Finder.Search(auto)
 	if not s.activityID then
 		return false, "Pick a dungeon first."
 	end
-	if not C_LFGList or not C_LFGList.Search then
+	if not ns.Game.HasSearch() then
 		return false, "This client has no Group Finder search."
 	end
 	if auto and Finder.searchNeedsClick then
@@ -613,7 +578,7 @@ function Finder.Search(auto)
 	if not categoryID then
 		return false, "The dungeon's Group Finder category is unknown; pick the dungeon again."
 	end
-	local ok, err = pcall(C_LFGList.Search, categoryID, 0, 0, nil, false, nil, { s.activityID })
+	local ok, err = ns.Game.Search(categoryID, s.activityID)
 	Finder.lastSearchAt = GetTime()
 	Finder.searchCount = Finder.searchCount + 1
 	if not ok then

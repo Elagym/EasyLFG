@@ -77,6 +77,10 @@ end
 local function printDebug()
 	local Finder, Inviter = ns.Finder, ns.Inviter
 	ns.Print(("v%s debug"):format(ns.VERSION))
+	if ns.Demo.active then
+		print(("  |cffff9900Demo running|r: %d made-up players listed, %d in the pretend group. The lines below are the demo's."):format(
+			#ns.Demo.pool, #ns.Demo.roster))
+	end
 	local lfg = C_LFGList or {}
 	print(("  API: Search %s, GetSearchResults %s, PlayerInfo %s, LeaderInfo %s"):format(
 		yes(lfg.Search), yes(lfg.GetSearchResults), yes(lfg.GetSearchResultPlayerInfo), yes(lfg.GetSearchResultLeaderInfo)))
@@ -156,6 +160,7 @@ local function help()
 	print("  /elfg rolecheck - ask the group to confirm their roles")
 	print("  /elfg forget - forget who declined or did not answer")
 	print("  /elfg log - show what EasyLFG did")
+	print("  /elfg demo - a demo window with made-up players (again to close)")
 	print("  /elfg debug - what the game allows, and what happened")
 	print("Key bindings: Options > Key Bindings > AddOns > EasyLFG.")
 end
@@ -192,6 +197,11 @@ local function handle(input)
 		ns.Print(message)
 	elseif command == "log" then
 		ns.LogWindow.Toggle()
+	elseif command == "demo" then
+		local ok, message = ns.UI.ToggleDemo()
+		if not ok then
+			ns.Print(message)
+		end
 	elseif command == "debug" then
 		printDebug()
 	else

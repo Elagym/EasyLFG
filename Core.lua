@@ -96,7 +96,8 @@ function ns.Trim(text)
 end
 
 function ns.Print(message)
-	DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. message)
+	local demo = ns.Demo and ns.Demo.active and "|cffff9900[demo]|r " or ""
+	DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. demo .. message)
 end
 
 function ns.Clamp(value, low, high)
@@ -122,6 +123,9 @@ end
 
 function ns.Log(text)
 	text = ns.StripCodes and ns.StripCodes(tostring(text)) or tostring(text)
+	if ns.Demo and ns.Demo.active then
+		text = "[demo] " .. text
+	end
 	local list = logList()
 	local last = list[#list]
 	local now = date("%H:%M:%S")
@@ -255,6 +259,17 @@ end
 
 -- The name of a player unit, or nil when there is none or it cannot be read.
 function ns.ReadUnitName(unit)
+	return ns.Game.UnitName(unit)
+end
+
+-- The game -----------------------------------------------------------------------------------
+-- Every call EasyLFG makes to the game about players, the group and the Group Finder goes
+-- through ns.Game. The demo (Demo.lua) swaps these for a simulation, and puts them back after.
+
+local Game = {}
+ns.Game = Game
+
+function Game.UnitName(unit)
 	local exists = ns.Readable(UnitExists(unit))
 	if not exists then
 		return nil
@@ -267,6 +282,128 @@ function ns.ReadUnitName(unit)
 		return nil
 	end
 	return ns.JoinName(name, realm)
+end
+
+-- The class file name of a unit ("WARRIOR"), or nil.
+function Game.UnitClass(unit)
+	return ns.Readable((select(2, UnitClass(unit))))
+end
+
+-- The role the game shows for a unit ("TANK", "HEALER", "DAMAGER", "NONE"), or nil.
+function Game.AssignedRole(unit)
+	if not UnitGroupRolesAssigned then
+		return nil
+	end
+	return ns.Readable(UnitGroupRolesAssigned(unit))
+end
+
+-- The units of the other group members.
+function Game.GroupUnits()
+	local units = {}
+	if IsInRaid and ns.Readable(IsInRaid()) then
+		for i = 1, (GetNumGroupMembers() or 0) do
+			local unit = "raid" .. i
+			if not ns.Readable(UnitIsUnit(unit, "player")) then
+				units[#units + 1] = unit
+			end
+		end
+	else
+		local count = GetNumSubgroupMembers and GetNumSubgroupMembers() or 0
+		for i = 1, (ns.Readable(count) or 0) do
+			units[#units + 1] = "party" .. i
+		end
+	end
+	return units
+end
+
+function Game.IsInGroup()
+	return ns.Readable(IsInGroup()) and true or false
+end
+
+function Game.IsLeader()
+	return ns.Readable(UnitIsGroupLeader("player")) and true or false
+end
+
+function Game.IsRaidAssistant()
+	return (ns.Readable(IsInRaid()) and ns.Readable(UnitIsGroupAssistant("player"))) and true or false
+end
+
+function Game.HasSearch()
+	return C_LFGList ~= nil and C_LFGList.Search ~= nil
+end
+
+-- Searches the Group Finder for one dungeon. Returns ok, error.
+function Game.Search(categoryID, activityID)
+	return pcall(C_LFGList.Search, categoryID, 0, 0, nil, false, nil, { activityID })
+end
+
+-- The result ids of the last search, or nil.
+function Game.SearchResults()
+	if not C_LFGList or not C_LFGList.GetSearchResults then
+		return nil
+	end
+	local ok, _, results = pcall(C_LFGList.GetSearchResults)
+	return ok and type(results) == "table" and results or nil
+end
+
+-- One listing's info table, or nil.
+function Game.ResultInfo(resultID)
+	local ok, info = pcall(C_LFGList.GetSearchResultInfo, resultID)
+	return ok and type(info) == "table" and info or nil
+end
+
+-- The player of a solo listing (classFilename, level, lfgRoles...), or nil.
+function Game.ResultPlayer(resultID)
+	for _, getter in ipairs({ "GetSearchResultPlayerInfo", "GetSearchResultLeaderInfo" }) do
+		local fn = C_LFGList[getter]
+		if fn then
+			local ok, player
+			if getter == "GetSearchResultPlayerInfo" then
+				ok, player = pcall(fn, resultID, 1)
+			else
+				ok, player = pcall(fn, resultID)
+			end
+			if ok and type(player) == "table" then
+				return player
+			end
+		end
+	end
+	return nil
+end
+
+-- Returns ok, error.
+function Game.Whisper(name, text)
+	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+	if not send then
+		return false, "no chat function"
+	end
+	local ok, err = pcall(send, text, "WHISPER", nil, name)
+	if not ok then
+		return false, tostring(err)
+	end
+	return true
+end
+
+-- Returns ok, error.
+function Game.Invite(name)
+	local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit or InviteToGroup
+	if not invite then
+		return false, "no invite function"
+	end
+	local ok, err = pcall(invite, name)
+	if not ok then
+		return false, tostring(err)
+	end
+	return true
+end
+
+function Game.HasRolePoll()
+	return InitiateRolePoll ~= nil
+end
+
+-- Starts a role check. Returns ok (no error), result.
+function Game.RolePoll()
+	return pcall(InitiateRolePoll)
 end
 
 -- Removes colour codes and player links from a chat message.
@@ -393,13 +530,18 @@ function ns.On(event, label, fn)
 	table.insert(handlers[event], ns.Guard(label, fn))
 end
 
-eventFrame:SetScript("OnEvent", function(_, event, ...)
+-- Runs EasyLFG's own handlers for an event (the game's events, or the demo's).
+function ns.Dispatch(event, ...)
 	local list = handlers[event]
 	if list then
 		for _, handler in ipairs(list) do
 			handler(event, ...)
 		end
 	end
+end
+
+eventFrame:SetScript("OnEvent", function(_, event, ...)
+	ns.Dispatch(event, ...)
 end)
 
 -- Something the client refused to let EasyLFG do (a protected call without a click).

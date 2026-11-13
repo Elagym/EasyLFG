@@ -29,7 +29,7 @@ function FrameMethods.GetScript(self, name) return self.scripts[name] end
 function FrameMethods.RegisterEvent(self, event) self.events[event] = true end
 function FrameMethods.UnregisterEvent(self, event) self.events[event] = nil end
 function FrameMethods.Show(self) local was = self.shown; self.shown = true; if not was and self.scripts.OnShow then self.scripts.OnShow(self) end end
-function FrameMethods.Hide(self) self.shown = false end
+function FrameMethods.Hide(self) local was = self.shown; self.shown = false; if was and self.scripts.OnHide then self.scripts.OnHide(self) end end
 function FrameMethods.SetShown(self, v) if v then self:Show() else self:Hide() end end
 function FrameMethods.IsShown(self) return self.shown end
 function FrameMethods.SetText(self, t) self.text = t end
@@ -233,7 +233,7 @@ end
 
 function M.Load(dir)
 	local ns = {}
-	for _, file in ipairs({ "Core.lua", "Finder.lua", "Inviter.lua", "UI.lua", "LogWindow.lua", "Slash.lua" }) do
+	for _, file in ipairs({ "Core.lua", "Finder.lua", "Inviter.lua", "Demo.lua", "UI.lua", "LogWindow.lua", "Slash.lua" }) do
 		local chunk = assert(loadfile(dir .. "/" .. file))
 		chunk("EasyLFG", ns)
 	end

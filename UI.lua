@@ -1,5 +1,9 @@
 -- EasyLFG window: the dungeon, the rules per role, the whisper, the buttons, and the list of
 -- players found in the Group Finder with what EasyLFG thinks of each.
+--
+-- There are two windows built the same way: the main one, and the demo one (/elfg demo only),
+-- where the demo is always on: opening it starts the demo, closing it ends the demo. Only one is
+-- open at a time; `frame` and `widgets` are the ones of the window in use.
 
 local _, ns = ...
 
@@ -14,6 +18,17 @@ local PARTY_ROW = 18
 
 local frame
 local widgets = { roles = {}, rows = {} }
+local windows = {} -- "main" / "demo" -> { frame, widgets }
+local current = "main"
+
+-- Makes this window the one the drawing code works on.
+local function use(kind)
+	local window = windows[kind]
+	if window then
+		frame, widgets = window.frame, window.widgets
+	end
+	current = kind
+end
 
 ns.status = "Pick a dungeon, set your rules, then Search."
 
@@ -529,7 +544,7 @@ local function buildList()
 		label:SetPoint("TOPLEFT", panel, "TOPLEFT", header[2], -8)
 	end
 
-	local scroll = CreateFrame("ScrollFrame", "EasyLFGListScroll", panel, "UIPanelScrollFrameTemplate")
+	local scroll = CreateFrame("ScrollFrame", (current == "demo" and "EasyLFGDemo" or "EasyLFG") .. "ListScroll", panel, "UIPanelScrollFrameTemplate")
 	scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 4, -24)
 	scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -26, 6)
 	local content = CreateFrame("Frame", nil, scroll)
@@ -602,9 +617,11 @@ local function placeParty()
 	end
 end
 
-local function restorePosition()
+local POSITION_KEY = { main = "window", demo = "demoWindow" }
+
+local function restorePosition(kind)
 	frame:ClearAllPoints()
-	local saved = ns.db and ns.db.window
+	local saved = ns.db and ns.db[POSITION_KEY[kind]]
 	if type(saved) == "table" and saved.point then
 		frame:SetPoint(saved.point, UIParent, saved.relativePoint or saved.point, saved.x or 0, saved.y or 0)
 	else
@@ -612,8 +629,13 @@ local function restorePosition()
 	end
 end
 
-local function build()
-	frame = CreateFrame("Frame", "EasyLFGFrame", UIParent, "BackdropTemplate")
+local FRAME_NAME = { main = "EasyLFGFrame", demo = "EasyLFGDemoFrame" }
+
+local function build(kind)
+	widgets = { roles = {}, rows = {} }
+	frame = CreateFrame("Frame", FRAME_NAME[kind], UIParent, "BackdropTemplate")
+	windows[kind] = { frame = frame, widgets = widgets }
+	current = kind
 	frame:Hide()
 	frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
 	frame:SetFrameStrata("HIGH")
@@ -626,7 +648,7 @@ local function build()
 	frame:SetScript("OnDragStop", function(self)
 		self:StopMovingOrSizing()
 		local point, _, relativePoint, x, y = self:GetPoint()
-		ns.db.window = { point = point, relativePoint = relativePoint, x = x, y = y }
+		ns.db[POSITION_KEY[kind]] = { point = point, relativePoint = relativePoint, x = x, y = y }
 		placeParty()
 	end)
 	frame:SetBackdrop({
@@ -637,7 +659,7 @@ local function build()
 	})
 	frame:SetBackdropColor(0.06, 0.06, 0.09, 0.96)
 	frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
-	restorePosition()
+	restorePosition(kind)
 
 	local title = newLabel(frame, "EasyLFG", "GameFontNormalLarge")
 	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -14)
@@ -653,6 +675,19 @@ local function build()
 		ns.LogWindow.Toggle()
 	end)
 	widgets.log = logButton
+
+	if kind == "demo" then
+		local banner = newLabel(frame, "|cffff9900DEMO|r |cffffd0a0made-up players, nothing is sent to the game|r", "GameFontNormal")
+		banner:SetPoint("LEFT", version, "RIGHT", 12, 1)
+		widgets.demoBanner = banner
+		frame:SetBackdropBorderColor(1, 0.6, 0.1, 1)
+		-- Closing the demo window (button, Escape, /elfg demo) ends the demo.
+		frame:SetScript("OnHide", ns.Guard("demo window closed", function()
+			if ns.Demo.active then
+				ns.Demo.Stop()
+			end
+		end))
+	end
 
 	buildSettings()
 	buildActions()
@@ -681,7 +716,7 @@ local function build()
 		ns.Inviter.StartRefreshTicker()
 	end)
 
-	tinsert(UISpecialFrames, "EasyLFGFrame")
+	tinsert(UISpecialFrames, FRAME_NAME[kind])
 end
 
 -- Refreshing --------------------------------------------------------------------------------
@@ -741,7 +776,7 @@ function UI.GroupSlots(state)
 	local byRole = { TANK = {}, HEALER = {}, DAMAGER = {} }
 	local myRole = ns.ROLE_LABEL[ns.settings.myRole] and ns.settings.myRole or "DAMAGER"
 	byRole[myRole][1] = { role = myRole, name = ns.ReadUnitName("player") or "You",
-		class = ns.Readable((select(2, UnitClass("player")))), kind = "you" }
+		class = ns.Game.UnitClass("player"), kind = "you" }
 	for _, member in ipairs(state.members) do
 		local list = byRole[member.role] or byRole.DAMAGER
 		list[#list + 1] = { role = member.role, name = member.name, class = member.class,
@@ -822,6 +857,9 @@ function UI.RefreshParty()
 	elseif ns.Inviter.auto then
 		title = title .. "  |cffffd100auto|r"
 	end
+	if ns.Demo.active then
+		title = title .. "  |cffff9900demo|r"
+	end
 	widgets.partyTitle:SetText(title)
 end
 
@@ -848,7 +886,7 @@ local function refreshList()
 	end
 	widgets.content:SetHeight(math.max(ROW_HEIGHT, #list * ROW_HEIGHT))
 
-	local title = "Players listed alone for this dungeon"
+	local title = ns.Demo.active and "Made-up players listed alone (demo)" or "Players listed alone for this dungeon"
 	if #list > 0 then
 		title = ("%s: %d, |cff60ff60%d match|r"):format(title, #list, stats.eligible or 0)
 	end
@@ -909,19 +947,57 @@ end
 
 -- Public --------------------------------------------------------------------------------------
 
-function UI.Show()
-	if not frame then
-		build()
+local function shown(kind)
+	return windows[kind] ~= nil and windows[kind].frame:IsShown()
+end
+
+local function hide(kind)
+	if shown(kind) then
+		windows[kind].frame:Hide() -- the demo window ends the demo as it closes
+	end
+end
+
+-- Opens a window, closing the other one first.
+local function open(kind)
+	hide(kind == "main" and "demo" or "main")
+	if windows[kind] then
+		use(kind)
+	else
+		build(kind)
 	end
 	frame:Show()
 end
 
+function UI.Show()
+	open("main")
+end
+
 function UI.Toggle()
-	if frame and frame:IsShown() then
-		frame:Hide()
+	if current == "main" and shown("main") then
+		hide("main")
 	else
 		UI.Show()
 	end
+end
+
+-- /elfg demo: opens the demo window, which starts the demo; again closes it, which ends it.
+function UI.ToggleDemo()
+	if shown("demo") then
+		hide("demo")
+		use("main")
+		return true, "Demo ended."
+	end
+	hide("main")
+	local ok, message = ns.Demo.Start()
+	if not ok then
+		return false, message
+	end
+	open("demo")
+	return true, message
+end
+
+function UI.IsDemoShown()
+	return shown("demo")
 end
 
 function UI.IsShown()

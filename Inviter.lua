@@ -113,13 +113,13 @@ end
 -- Permission ---------------------------------------------------------------------------------
 
 function Inviter.CanInvite()
-	if not ns.Readable(IsInGroup()) then
+	if not ns.Game.IsInGroup() then
 		return true
 	end
-	if ns.Readable(UnitIsGroupLeader("player")) then
+	if ns.Game.IsLeader() then
 		return true
 	end
-	return ns.Readable(IsInRaid()) and ns.Readable(UnitIsGroupAssistant("player")) or false
+	return ns.Game.IsRaidAssistant()
 end
 
 -- Sending ------------------------------------------------------------------------------------
@@ -142,30 +142,14 @@ function Inviter.FormatMessage(c, role)
 end
 
 local function sendWhisper(name, text)
-	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
-	if not send then
-		return false, "no chat function"
-	end
 	if text == "" then
 		return false, "empty message"
 	end
-	local ok, err = pcall(send, text, "WHISPER", nil, name)
-	if not ok then
-		return false, tostring(err)
-	end
-	return true
+	return ns.Game.Whisper(name, text)
 end
 
 local function sendInvite(name)
-	local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit or InviteToGroup
-	if not invite then
-		return false, "no invite function"
-	end
-	local ok, err = pcall(invite, name)
-	if not ok then
-		return false, tostring(err)
-	end
-	return true
+	return ns.Game.Invite(name)
 end
 
 -- The role for an invite by hand: the first role they fit, else the first role they listed that
@@ -721,11 +705,11 @@ function Inviter.StartRoleCheck()
 		rc.reason = nil
 	end
 	rc.wanted = false
-	if not InitiateRolePoll then
+	if not ns.Game.HasRolePoll() then
 		rc.result = "this client has no InitiateRolePoll"
 		return false, "This client cannot start a role check."
 	end
-	if not ns.Readable(IsInGroup()) then
+	if not ns.Game.IsInGroup() then
 		rc.result = "not in a group"
 		return false, "You are not in a group."
 	end
@@ -733,7 +717,7 @@ function Inviter.StartRoleCheck()
 		rc.result = "not the leader"
 		return false, "Only the group leader can start a role check."
 	end
-	local ok, result = pcall(InitiateRolePoll)
+	local ok, result = ns.Game.RolePoll()
 	rc.started = rc.started + 1
 	rc.lastAt = GetTime()
 	rc.result = ok and tostring(result) or ("error: " .. tostring(result))
@@ -886,7 +870,7 @@ function Inviter.PrefillRolePoll(popup)
 	if value == nil then
 		return
 	end
-	local class = ns.Readable((select(2, UnitClass("player"))))
+	local class = ns.Game.UnitClass("player")
 	if class and not ns.CanPlay(class, role) then
 		addLog(("Role check popup: left as it is (a %s cannot be %s)"):format(ns.ClassName(class), ns.ROLE_LABEL[role]))
 		return

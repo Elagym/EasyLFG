@@ -59,7 +59,20 @@ The game always allows a search from a click or a key press, so the refresh afte
 | `/elfg rolecheck` | ask the group to confirm their roles |
 | `/elfg forget` | forget who declined or did not answer |
 | `/elfg log` | show what EasyLFG did |
+| `/elfg demo` | open or close the demo window (made-up players) |
 | `/elfg debug` | what the game allows, and what happened |
+
+## Demo
+
+`/elfg demo` opens a separate demo window, with an orange border, where you can try EasyLFG with made-up players. The demo is always on in that window: opening it starts the demo, and closing it ends the demo. **Nothing is sent to the game**: no search, no whisper, no invite, no role check. The demo window uses your real settings, so a change you make there stays.
+
+- The list fills with about 14 made-up players for the dungeon you picked. Pick another dungeon and a new list is made for it. They have mixed classes, levels and roles, and some don't fit your rules. New ones list themselves every half minute or so.
+- **+** and **Start auto** work as usual. Each made-up player answers after a few seconds: joins, declines, is already in a group, or lets the invite run out.
+- Players who join make up a pretend group in the Group panel, and the role check is answered by them once the group is full. Your own role check popup isn't shown.
+- The window shows **DEMO**, and chat messages and log lines are marked `[demo]`.
+- The demo ends when you close its window: the close button, Escape, `/elfg` or `/elfg demo` again. A logout or `/reload` ends it too. Your real list, who you asked, and your group's roles all come back. Opening the main window closes the demo window.
+
+The demo can't tell you whether the game allows EasyLFG's searches and invites; only real play shows that.
 
 ## Log
 
