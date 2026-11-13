@@ -530,8 +530,8 @@ end
 -- for a click instead. A refusal shows up as ADDON_ACTION_BLOCKED or as a search that never
 -- answers. A search the server answers with LFG_LIST_SEARCH_FAILED (busy, throttled) only pauses
 -- automatic searches for FAIL_PAUSE seconds.
-Finder.MIN_SEARCH_GAP = 5 -- seconds between two searches EasyLFG starts itself
-Finder.HUNT_REFRESH = 5 -- seconds between searches while an open role has nobody listed
+Finder.MIN_SEARCH_GAP = 2 -- seconds between two searches EasyLFG starts itself
+Finder.HUNT_REFRESH = 2 -- seconds between searches while an open role has nobody listed
 Finder.AUTO_REFRESH = 10 -- seconds between refreshes in auto mode while a role is open
 Finder.FAIL_PAUSE = 15 -- seconds without automatic searches after the server failed one
 Finder.searchFailures = 0

@@ -44,9 +44,9 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 - Key bindings are under *Key Bindings > AddOns > EasyLFG*.
 
 **Keeping the list fresh:** after every invite, EasyLFG searches the Group Finder again (for your dungeon only).
-- **While nobody is listed for a role you still need**, it searches again every 5 seconds until someone is. It does this in auto mode, and also with auto off while the EasyLFG window is open. With auto off, you get a message and a sound when a match shows up ("Tank found: …"). In auto mode they're invited right away.
+- **While nobody is listed for a role you still need**, it searches again every 2 seconds until someone is. It does this in auto mode, and also with auto off while the EasyLFG window is open. With auto off, you get a message and a sound when a match shows up ("Tank found: …"). In auto mode they're invited right away.
 - Otherwise, auto mode refreshes every 10 seconds while a seat is open.
-- EasyLFG never searches more than once every 5 seconds. If the server rejects a search (too many searches), automatic searches pause for 15 seconds.
+- EasyLFG never searches more than once every 2 seconds. If the server rejects a search (too many searches), automatic searches pause for 15 seconds.
 
 The game always allows a search from a click or a key press, so the refresh after a clicked **+** always works. Auto mode searches on its own, which the game may refuse. If it does, EasyLFG tells you once and stops trying for the session. Auto invites keep running, and **Search** (or its key binding) refreshes the list.
 

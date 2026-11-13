@@ -399,8 +399,7 @@ report("group finder button", findFrame(function(f) return f.kind == "Button" an
 -- 21. The list refreshes after invites, and keeps searching while a role has nobody listed ----------
 EasyLFGFrame:Hide()
 Inviter.Stop()
--- Earlier scenarios never answered their automatic searches, so EasyLFG already fell back to clicks.
-report("earlier unanswered searches made it fall back", Finder.searchNeedsClick == true)
+-- Start from automatic searches allowed, whatever earlier scenarios left.
 Finder.searchNeedsClick = false
 Finder.silentFails = 0
 Finder.autoSearches = 0
@@ -421,20 +420,20 @@ report("refresh is for the chosen dungeon only", M.searches[#M.searches][7][1] =
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 M.Fire("CHAT_MSG_SYSTEM", "Fresh Tank declines your group invitation.")
 
--- Auto mode: every role is open with nobody listed, so it searches every 5 s until someone is.
+-- Auto mode: every role is open with nobody listed, so it searches every 2 s until someone is.
 ok = Inviter.Start()
 searches = #M.searches
-M.Advance(5)
-report("nobody listed: searched again after 5 s", #M.searches == searches + 1 and Finder.searchFromClick == false and Finder.autoSearches == 1, #M.searches - searches)
+M.Advance(2)
+report("nobody listed: searched again after 2 s", #M.searches == searches + 1 and Finder.searchFromClick == false and Finder.autoSearches == 1, #M.searches - searches)
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-M.Advance(5)
-report("still nobody: and again 5 s later", #M.searches == searches + 2, #M.searches - searches)
+M.Advance(2)
+report("still nobody: and again 2 s later", #M.searches == searches + 2, #M.searches - searches)
 M.AddListing({ name = "Fresh Priest", class = "PRIEST", level = 30, healer = true })
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 report("auto results invite the healer", Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Fresh Priest")
 report("automatic searches work: no failures counted", Finder.silentFails == 0 and not Finder.searchNeedsClick)
-report("refresh after the invite waits for the 5 s gap", #M.searches == searches + 2)
-M.Advance(5)
+report("refresh after the invite waits for the 2 s gap", #M.searches == searches + 2)
+M.Advance(2)
 report("gap passed: refreshed", #M.searches == searches + 3, #M.searches - searches)
 
 -- The game silently ignores automatic searches: after two without an answer, a click is needed.

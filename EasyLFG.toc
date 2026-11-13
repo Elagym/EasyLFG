@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: EasyLFG
 ## Notes: Builds your dungeon group from the Group Finder: pick the roles, classes and levels you want, and it invites matching players one at a time. /elfg
-## Version: 1.7.0
+## Version: 1.7.1
 ## Author: Elagym
 ## X-Website: https://github.com/Elagym/EasyLFG
 ## IconTexture: Interface\Icons\INV_Misc_GroupNeedMore
