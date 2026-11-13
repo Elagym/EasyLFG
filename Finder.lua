@@ -209,11 +209,8 @@ function Finder.GroupState()
 		size = 1,
 		unknownRoles = 0,
 	}
-	-- In a group, your own answer to a role check wins over the "I am" setting, and updates it.
-	local myAssigned = ns.Readable(IsInGroup()) and Finder.AssignedRole("player")
-	if myAssigned and myAssigned ~= s.myRole then
-		s.myRole = myAssigned
-	end
+	-- Your seat is your "I am" setting. The game's role for you is not read here: everyone is marked
+	-- DPS by default. Only the EasyLFG window changes "I am", never a role check answer.
 	local myRole = ns.ROLE_LABEL[s.myRole] and s.myRole or "DAMAGER"
 	state.filled[myRole] = state.filled[myRole] + 1
 	local myClass = ns.Readable((select(2, UnitClass("player"))))

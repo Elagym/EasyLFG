@@ -842,8 +842,8 @@ function Inviter.AfterRoleChange()
 	ns.Refresh()
 end
 
-function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
-	changedName, newRole = ns.Readable(changedName), ns.Readable(newRole)
+function Inviter.OnRoleChanged(_, changedName, fromName, _, newRole)
+	changedName, fromName, newRole = ns.Readable(changedName), ns.Readable(fromName), ns.Readable(newRole)
 	if type(changedName) ~= "string" or not ns.ROLE_LABEL[newRole] then
 		return
 	end
@@ -853,8 +853,20 @@ function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
 
 	local me = ns.ReadUnitName("player")
 	if me and ns.SameName(changedName, me) then
-		ns.settings.myRole = newRole
-		addLog(("Role check: you picked %s"):format(ns.ROLE_LABEL[newRole]))
+		-- "I am" only changes in EasyLFG's window. A role check answer (a quick Accept on the wrong
+		-- role) or the game's default DPS would otherwise free your seat and get it filled by
+		-- someone else, so you are told instead.
+		local mine = ns.settings.myRole
+		local byYou = type(fromName) == "string" and ns.SameName(fromName, me)
+		if newRole == mine then
+			addLog(("Role check: you picked %s"):format(ns.ROLE_LABEL[newRole]))
+		elseif byYou then
+			addLog(("Role check: you picked %s, but EasyLFG keeps you as %s"):format(ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[mine] or "?"))
+			ns.Print(("|cffffd100You picked %s in the role check, but EasyLFG still counts you as %s.|r Change \"I am\" in the EasyLFG window if you meant it."):format(
+				ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[mine] or "?"))
+		else
+			addLog(("The game set your role to %s; EasyLFG keeps you as %s"):format(ns.ROLE_LABEL[newRole], ns.ROLE_LABEL[mine] or "?"))
+		end
 	else
 		local record, key = ns.Finder.MemberRecord(changedName)
 		if not record then
@@ -895,6 +907,39 @@ function Inviter.OnRoleChanged(_, changedName, _, _, newRole)
 		addLog(("Too many %s: %d for %d wanted"):format(ns.ROLE_LABEL[newRole], state.filled[newRole], need))
 	end
 	Inviter.AfterRoleChange()
+end
+
+-- The game's role check popup ---------------------------------------------------------------------
+-- When the popup opens it selects the role the game has for you (DPS by default). EasyLFG selects
+-- your "I am" role instead, so Accept confirms it. Accept stays your own click; if the game ever
+-- refuses that (ADDON_ACTION_BLOCKED on UnitSetRole...), EasyLFG stops pre-selecting.
+
+local POPUP_ROLE = { TANK = "Tank", HEALER = "Healer", DAMAGER = "Damage" }
+
+function Inviter.PrefillRolePoll(popup)
+	popup = popup or RolePollPopup
+	if not popup or Inviter.prefillBlocked or not (Enum and Enum.LFGRole) then
+		return
+	end
+	local role = ns.settings.myRole
+	local value = POPUP_ROLE[role] and Enum.LFGRole[POPUP_ROLE[role]]
+	if value == nil then
+		return
+	end
+	local class = ns.Readable((select(2, UnitClass("player"))))
+	if class and not ns.CanPlay(class, role) then
+		addLog(("Role check popup: left as it is (a %s cannot be %s)"):format(ns.ClassName(class), ns.ROLE_LABEL[role]))
+		return
+	end
+	popup.role = value
+	if RolePollPopup_UpdateChecked then
+		RolePollPopup_UpdateChecked(popup)
+	end
+	addLog(("Role check popup: %s pre-selected (your EasyLFG role)"):format(ns.ROLE_LABEL[role]))
+end
+
+if hooksecurefunc and RolePollPopup_Show then
+	hooksecurefunc("RolePollPopup_Show", ns.Guard("role check popup", Inviter.PrefillRolePoll))
 end
 
 -- System messages -------------------------------------------------------------------------------
@@ -1038,6 +1083,12 @@ end
 -- The game blocked one of our calls: auto mode cannot work here, so it stops and says why.
 function Inviter.OnBlocked(functionName)
 	local fn = tostring(functionName)
+	if fn:find("UnitSetRole") then
+		-- Accept in the role check popup was refused because EasyLFG touched its choice.
+		Inviter.prefillBlocked = true
+		ns.Print("|cffff6060The game refused your role from the role check popup.|r EasyLFG no longer pre-selects it this session; set your role again (Group Finder role menu, or the next role check).")
+		return
+	end
 	if fn:find("Search") then
 		-- Only an automatic search can be refused; auto invites go on, the list needs a click.
 		ns.Finder.SearchRefused("blocked: " .. fn)

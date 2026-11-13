@@ -538,10 +538,47 @@ M.party[2].role = "DAMAGER"
 M.Fire("ROLE_CHANGED_INFORM", "Spare Tank", "Spare Tank", "TANK", "DAMAGER")
 report("stopped stays stopped", Inviter.auto == false and Inviter.pending.TANK == nil)
 
--- Your own answer updates "I am".
-M.myAssigned = "HEALER"
+-- The game's default role for you never changes "I am"; a role you pick yourself does.
+ns.settings.myRole = "TANK"
+M.myAssigned = "DAMAGER"
 Finder.Evaluate()
-report("my role from the role check", ns.settings.myRole == "HEALER")
+report("game default does not overwrite I am", ns.settings.myRole == "TANK" and Finder.state.filled.TANK >= 1)
+M.Fire("ROLE_CHANGED_INFORM", "Me Myself", "", "NONE", "DAMAGER")
+report("role set by the game is not my choice", ns.settings.myRole == "TANK")
+M.Fire("ROLE_CHANGED_INFORM", "Me Myself", "Me Myself", "DAMAGER", "HEALER")
+report("my own role check answer does not change I am either", ns.settings.myRole == "TANK")
+report("you are told about the mismatch", M.PrintsContain("You picked Healer in the role check, but EasyLFG still counts you as Tank"))
+-- The case seen in-game: you are the tank, a quick Accept on DPS must not open the tank seat.
+wipe(Inviter.pending)
+wipe(Inviter.awaiting)
+wipe(ns.asked)
+Finder.searchNeedsClick = true
+M.ClearListings()
+M.AddListing({ name = "Moo Glow", class = "DRUID", level = 30, tank = true })
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+M.Fire("ROLE_CHANGED_INFORM", "Me Myself", "Me Myself", "TANK", "DAMAGER")
+local beforeMoo = #M.invites
+Inviter.InviteRound(true)
+report("no second tank after a wrong role check answer", #M.invites == beforeMoo and find("Moo Glow").status == "nofit", find("Moo Glow").reason)
+M.myAssigned = nil
+ns.settings.myRole = "DAMAGER"
+
+-- The role check popup opens with your EasyLFG role selected, not the game's default DPS.
+M.myClass = "DRUID"
+ns.settings.myRole = "TANK"
+M.myAssigned = "DAMAGER"
+RolePollPopup_Show(RolePollPopup)
+report("popup pre-selects my role", RolePollPopup.role == Enum.LFGRole.Tank and RolePollPopup.checkedRole == Enum.LFGRole.Tank, RolePollPopup.role)
+M.myClass = "MAGE"
+RolePollPopup_Show(RolePollPopup)
+report("a role my class cannot play is left alone", RolePollPopup.role == Enum.LFGRole.Damage, RolePollPopup.role)
+M.myClass = "DRUID"
+ns.settings.myRole = "HEALER"
+M.Fire("ADDON_ACTION_BLOCKED", "EasyLFG", "UnitSetRoleEnum()")
+RolePollPopup_Show(RolePollPopup)
+report("refused by the game: no more pre-selecting", Inviter.prefillBlocked and RolePollPopup.role == Enum.LFGRole.Damage and M.PrintsContain("refused your role"))
+Inviter.prefillBlocked = nil
+M.myClass = "MAGE"
 M.myAssigned = nil
 ns.settings.myRole = "DAMAGER"
 
@@ -650,6 +687,8 @@ report("log: group complete with members", logHas("Group complete (5 players): y
 report("log: role check started", logHas("Role check started (Garlick Naan joined as Healer)"))
 report("log: early default role", logHas("Garlick Naan was set to DPS before the role check; still counted as Healer until they answer"))
 report("log: role check done", logHas("Role check done for Garlick Naan: Healer (invited as Healer"))
+report("log: popup pre-selected", logHas("Role check popup: Tank pre-selected (your EasyLFG role)"))
+report("log: game default kept out of I am", logHas("The game set your role to DPS; EasyLFG keeps you as Tank"))
 report("log: role check timed out", logHas("Role check timed out: no role check answer from Big Bear after 30 s; counted as Tank"), logShow())
 report("log: role check by hand", logHas("Role check started (by hand)"))
 report("log: role answer differs", logHas("Role check: Bear Tank picked Healer but was invited as Tank; the Tank seat is open again"))

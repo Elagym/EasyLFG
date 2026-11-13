@@ -184,6 +184,21 @@ function M.Install()
 	end
 	_G.MenuUtil = { CreateContextMenu = function(owner, fn) local root = newDescription() fn(owner, root) M.menu = root end }
 	_G.C_Texture = { GetAtlasInfo = function() return nil end }
+
+	-- The game's role check popup (Blizzard_FrameXML/Classic/RolePoll.lua), reduced.
+	_G.Enum = { LFGRole = { Tank = 0, Healer = 1, Damage = 2 } }
+	_G.hooksecurefunc = function(name, hook)
+		local original = _G[name]
+		_G[name] = function(...) local r = original(...) hook(...) return r end
+	end
+	_G.RolePollPopup = M.NewFrame("Frame", "RolePollPopup")
+	local ENUM = { TANK = 0, HEALER = 1, DAMAGER = 2 }
+	_G.RolePollPopup_UpdateChecked = function(self) self.checkedRole = self.role end
+	_G.RolePollPopup_Show = function(self)
+		self.role = ENUM[UnitGroupRolesAssigned("player")]
+		RolePollPopup_UpdateChecked(self)
+		self:Show()
+	end
 end
 
 -- Helpers for tests -------------------------------------------------------------------------
