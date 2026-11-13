@@ -495,26 +495,100 @@ function Inviter.HasOpenRole()
 	return false
 end
 
-local tickerToken = 0
-
--- While auto mode runs, a fresh list every few seconds as long as a role waits for a player.
-local function startRefreshTicker()
-	tickerToken = tickerToken + 1
-	local token = tickerToken
-	local function tick()
-		if token ~= tickerToken or not Inviter.auto then
-			return
-		end
-		if Inviter.HasOpenRole() then
-			ns.Finder.Refresh(false)
-		end
-		C_Timer.After(ns.Finder.AUTO_REFRESH, ns.Guard("auto refresh", tick))
+-- Open roles nobody in the list fits right now (an invite waiting fills its role's seat).
+function Inviter.MissingRoles(state)
+	state = state or ns.Finder.Evaluate()
+	local missing = {}
+	if state.done then
+		return missing
 	end
-	C_Timer.After(ns.Finder.AUTO_REFRESH, ns.Guard("auto refresh", tick))
+	for _, role in ipairs(ns.ROLES) do
+		if state.remaining[role] > 0 and not ns.Finder.BestFor(role) then
+			missing[#missing + 1] = role
+		end
+	end
+	return missing
 end
 
-local function stopRefreshTicker()
-	tickerToken = tickerToken + 1
+-- Roles that had no match at the last look, to notice when one shows up: role -> true.
+Inviter.hunting = {}
+
+local function rolesText(roles)
+	local labels = {}
+	for _, role in ipairs(roles) do
+		labels[#labels + 1] = ns.ROLE_LABEL[role]
+	end
+	return table.concat(labels, " or ")
+end
+
+-- Notes which open roles have no match. A role that just got one is announced when auto mode is
+-- off (in auto mode the invite itself says it). Returns the missing roles.
+function Inviter.UpdateHunting()
+	local missing = Inviter.MissingRoles()
+	local now = {}
+	for _, role in ipairs(missing) do
+		now[role] = true
+	end
+	for role in pairs(Inviter.hunting) do
+		if not now[role] then
+			local c = ns.Finder.BestFor(role)
+			if c then
+				addLog(("%s found: %s (%s %s)"):format(ns.ROLE_LABEL[role], c.name, ns.ClassName(c.class), tostring(c.level)))
+				if not Inviter.auto then
+					ns.Print(("|cff60ff60%s found:|r %s. Click + on their row to invite."):format(ns.ROLE_LABEL[role], describe(c)))
+					if PlaySound and SOUNDKIT and SOUNDKIT.READY_CHECK then
+						pcall(PlaySound, SOUNDKIT.READY_CHECK)
+					end
+				end
+			end
+		end
+	end
+	local text = #missing > 0 and rolesText(missing) or nil
+	if text and text ~= Inviter.huntingText then
+		addLog(("Nobody listed for %s: searching every %d s until someone is"):format(text, ns.Finder.HUNT_REFRESH))
+	end
+	Inviter.huntingText = text
+	Inviter.hunting = now
+	return missing
+end
+
+-- Watching the list: in auto mode, or while the EasyLFG window is open. While an open role has
+-- nobody to invite, the list is searched again every HUNT_REFRESH seconds until someone shows up;
+-- in auto mode it is also kept fresh every AUTO_REFRESH seconds otherwise.
+function Inviter.Watching()
+	return Inviter.auto or (ns.UI and ns.UI.IsShown and ns.UI.IsShown()) or false
+end
+
+function Inviter.RefreshTick()
+	if not ns.settings.activityID or not Inviter.CanInvite() then
+		return
+	end
+	local missing = Inviter.UpdateHunting()
+	if #missing > 0 then
+		ns.Finder.Refresh(false)
+	elseif Inviter.auto and Inviter.HasOpenRole()
+		and GetTime() - (ns.Finder.lastSearchAt or -1000) >= ns.Finder.AUTO_REFRESH then
+		ns.Finder.Refresh(false)
+	end
+end
+
+local tickerRunning = false
+
+-- Starts the refresh ticker if it is not running; it stops by itself once nothing is watched.
+local function startRefreshTicker()
+	if tickerRunning then
+		return
+	end
+	tickerRunning = true
+	local function tick()
+		if not Inviter.Watching() then
+			tickerRunning = false
+			return
+		end
+		Inviter.RefreshTick()
+		C_Timer.After(ns.Finder.HUNT_REFRESH, ns.Guard("refresh ticker", tick))
+	end
+	C_Timer.After(ns.Finder.HUNT_REFRESH, ns.Guard("refresh ticker", tick))
 end
 
 Inviter.StartRefreshTicker = startRefreshTicker
@@ -555,7 +629,7 @@ function Inviter.Stop()
 	Inviter.auto = false
 	Inviter.autoStoppedAt = nil -- stopped by you: a role check does not turn it back on
 	Inviter.inviteAfterSearch = false
-	stopRefreshTicker()
+	-- The ticker stops by itself unless the window is open (then it keeps looking for missing roles).
 	if Inviter.PendingCount() > 0 then
 		return true, ("Auto invite off. Still waiting for %s."):format(Inviter.PendingText())
 	end
@@ -564,6 +638,9 @@ end
 
 -- New search results: invites that waited for them go out now.
 function Inviter.OnResults()
+	if ns.settings.activityID and Inviter.CanInvite() then
+		Inviter.UpdateHunting()
+	end
 	if Inviter.inviteAfterSearch or Inviter.auto then
 		Inviter.inviteAfterSearch = false
 		local _, message = Inviter.InviteRound(false)

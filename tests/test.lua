@@ -404,7 +404,8 @@ LFGBrowseFrame.SendMessageButton = M.NewFrame("Button")
 M.Fire("ADDON_LOADED", "Blizzard_GroupFinder_VanillaStyle")
 report("group finder button", findFrame(function(f) return f.kind == "Button" and f.text == "EasyLFG" end) ~= nil)
 
--- 21. The list refreshes after invites, and every 10 s in auto mode -----------------------------------
+-- 21. The list refreshes after invites, and keeps searching while a role has nobody listed ----------
+EasyLFGFrame:Hide()
 Inviter.Stop()
 -- Earlier scenarios never answered their automatic searches, so EasyLFG already fell back to clicks.
 report("earlier unanswered searches made it fall back", Finder.searchNeedsClick == true)
@@ -429,18 +430,21 @@ report("refresh is for the chosen dungeon only", M.searches[#M.searches][7][1] =
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 M.Fire("CHAT_MSG_SYSTEM", "Fresh Tank declines your group invitation.")
 
--- Auto mode: every role is open with nobody to invite, so it refreshes every 10 s.
+-- Auto mode: every role is open with nobody listed, so it searches every 5 s until someone is.
 ok = Inviter.Start()
 searches = #M.searches
-M.Advance(10)
-report("auto refresh after 10 s", #M.searches == searches + 1 and Finder.searchFromClick == false and Finder.autoSearches == 1, #M.searches - searches)
+M.Advance(5)
+report("nobody listed: searched again after 5 s", #M.searches == searches + 1 and Finder.searchFromClick == false and Finder.autoSearches == 1, #M.searches - searches)
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+M.Advance(5)
+report("still nobody: and again 5 s later", #M.searches == searches + 2, #M.searches - searches)
 M.AddListing({ name = "Fresh Priest", class = "PRIEST", level = 30, healer = true })
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 report("auto results invite the healer", Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Fresh Priest")
 report("automatic searches work: no failures counted", Finder.silentFails == 0 and not Finder.searchNeedsClick)
-report("refresh after those invites waits for the 5 s gap", #M.searches == searches + 1)
+report("refresh after the invite waits for the 5 s gap", #M.searches == searches + 2)
 M.Advance(5)
-report("gap passed: refreshed", #M.searches == searches + 2, #M.searches - searches)
+report("gap passed: refreshed", #M.searches == searches + 3, #M.searches - searches)
 
 -- The game silently ignores automatic searches: after two without an answer, a click is needed.
 M.Advance(11) -- the search above gets no answer
@@ -463,12 +467,43 @@ Finder.silentFails = 0
 M.Fire("ADDON_ACTION_BLOCKED", "EasyLFG", "C_LFGList.Search()")
 report("blocked search: falls back to clicks", Finder.searchNeedsClick == true and Inviter.auto == true)
 
--- Stopping auto mode stops the refreshes.
+-- Stopping auto mode with the window closed stops the refreshes.
 Finder.searchNeedsClick = false
 Inviter.Stop()
 searches = #M.searches
 M.Advance(60)
 report("no refresh after stop", #M.searches == searches)
+
+-- Auto mode off, window open: missing roles are searched for too, and a new match is announced.
+wipe(Inviter.pending)
+M.ClearListings()
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+Finder.silentFails = 0
+EasyLFGFrame:Show()
+searches = #M.searches
+M.Advance(5)
+report("window open: nobody listed, searched after 5 s", #M.searches == searches + 1 and Inviter.auto == false, #M.searches - searches)
+M.AddListing({ name = "Found Tank", class = "WARRIOR", level = 30, tank = true })
+local soundBefore = M.sound or 0
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+report("new match announced with a sound", M.PrintsContain("Tank found:") and (M.sound or 0) == soundBefore + 1)
+report("nothing invited with auto off", Inviter.PendingCount() == 0)
+-- The server fails a search (too many searches): a short pause, not a refusal.
+M.ClearListings()
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+M.Advance(5)
+M.Fire("LFG_LIST_SEARCH_FAILED", "throttled")
+report("server failure is not a refusal", not Finder.searchNeedsClick and Finder.searchFailures == 1)
+searches = #M.searches
+M.Advance(10)
+report("automatic searches pause after a server failure", #M.searches == searches)
+M.Advance(10)
+report("then they go on", #M.searches > searches)
+EasyLFGFrame:Hide()
+M.Advance(10)
+searches = #M.searches
+M.Advance(30)
+report("window closed: no more searching", #M.searches == searches)
 report("no errors after refresh tests", ns.lastError == nil, ns.lastError)
 
 -- 22. Role checks ------------------------------------------------------------------------------------

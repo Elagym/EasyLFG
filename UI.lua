@@ -614,6 +614,8 @@ local function build()
 		ns.Guard("show: group", ns.Finder.Evaluate)()
 		ns.Guard("show: list", ns.Finder.Scan)()
 		ns.Guard("show: refresh", UI.Refresh)()
+		-- While the window is open, missing roles are searched for until someone is listed.
+		ns.Inviter.StartRefreshTicker()
 	end)
 
 	tinsert(UISpecialFrames, "EasyLFGFrame")

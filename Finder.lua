@@ -560,13 +560,18 @@ end
 
 -- Searching ----------------------------------------------------------------------------------
 
--- The list is refreshed after every batch of invites and, in auto mode, every AUTO_REFRESH seconds
--- while a role is open. A search from a click or key press is always allowed. One that is not (auto
--- mode runs on events) may be refused by the game: then EasyLFG stops trying for the session and
--- asks for a click instead. A refusal shows up as ADDON_ACTION_BLOCKED or as a search that never
--- answers.
+-- The list is refreshed after every invite; while an open role has nobody listed, every
+-- HUNT_REFRESH seconds until someone is (in auto mode, or while the window is open); and in auto
+-- mode every AUTO_REFRESH seconds anyway. A search from a click or key press is always allowed.
+-- One that is not may be refused by the game: then EasyLFG stops trying for the session and asks
+-- for a click instead. A refusal shows up as ADDON_ACTION_BLOCKED or as a search that never
+-- answers. A search the server answers with LFG_LIST_SEARCH_FAILED (busy, throttled) only pauses
+-- automatic searches for FAIL_PAUSE seconds.
 Finder.MIN_SEARCH_GAP = 5 -- seconds between two searches EasyLFG starts itself
+Finder.HUNT_REFRESH = 5 -- seconds between searches while an open role has nobody listed
 Finder.AUTO_REFRESH = 10 -- seconds between refreshes in auto mode while a role is open
+Finder.FAIL_PAUSE = 15 -- seconds without automatic searches after the server failed one
+Finder.searchFailures = 0
 local SEARCH_WATCHDOG = 10 -- a search without an answer after this long counts as failed
 local SILENT_FAILS_TO_GIVE_UP = 2
 
@@ -652,7 +657,7 @@ function Finder.Refresh(fromClick)
 	if not ns.settings.activityID or Finder.searching then
 		return false
 	end
-	if not fromClick and Finder.searchNeedsClick then
+	if not fromClick and (Finder.searchNeedsClick or GetTime() < (Finder.pauseUntil or 0)) then
 		return false
 	end
 	local since = GetTime() - (Finder.lastSearchAt or -1000)
@@ -683,6 +688,23 @@ function Finder.QueueScan()
 		ns.Refresh()
 	end))
 end
+
+-- The server answered the search with a failure (busy, too many searches): the game does allow the
+-- search, so this is not a refusal; automatic searches just pause a little.
+ns.On("LFG_LIST_SEARCH_FAILED", "search failed", function(_, reason)
+	reason = ns.Readable(reason)
+	local auto = Finder.searching and not Finder.searchFromClick
+	Finder.searching = false
+	Finder.searchFailures = Finder.searchFailures + 1
+	Finder.lastSearchError = "server: " .. tostring(reason or "no reason given")
+	if auto then
+		Finder.silentFails = 0
+		Finder.pauseUntil = GetTime() + Finder.FAIL_PAUSE
+	end
+	ns.Log(("Search failed on the server (%s)%s"):format(tostring(reason or "no reason given"),
+		auto and (", automatic searches pause %d s"):format(Finder.FAIL_PAUSE) or ""))
+	ns.Refresh()
+end)
 
 ns.On("LFG_LIST_SEARCH_RESULTS_RECEIVED", "search results", function()
 	local source
