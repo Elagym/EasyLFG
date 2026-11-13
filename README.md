@@ -1,7 +1,7 @@
 # EasyLFG
 Make dungeon groups with ease
 
-An addon for **World of Warcraft Forever** that builds your dungeon group from the Group Finder. You say what you want, and it invites matching players, never more than one waiting per role, so nobody gets spammed.
+An addon for **World of Warcraft Forever** that builds your dungeon group from the Group Finder. You say what you want, and it invites matching players one at a time, so nobody gets spammed.
 
 ## What it does
 
@@ -13,13 +13,13 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 - Optionally ask for **distinct classes only**.
 - EasyLFG only searches, and only reads, the listings for the dungeon you picked. Without a dungeon, it does neither.
 - It reads the players who listed themselves alone for that dungeon. For each open role it picks the best match: highest level first, then the one listed longest.
-- **One invite at a time.** The next invite only goes out after an answer: declined, already in a group, not found, or no answer in time.
+- **One invite at a time.** The next invite only goes out after an answer: joined, declined, already in a group, not found, or no answer in time.
 - **Tanks and healers first.** EasyLFG invites a tank if one is available, else a healer, and only then a DPS.
-- **After a tank or healer joins, it waits for their role.** A role check starts as soon as they're in the group, and no new invite goes out until they've confirmed their role. Until then they count as the role they were invited for, even though the game marks everyone as DPS by default. If they don't answer within 30 seconds, EasyLFG goes on and counts them as the role they were invited for. A DPS joining needs no role check, so the next invite goes out right away.
+- **Everyone counts as the role they were invited for.** EasyLFG remembers each player by name with the role it invited them for, so a tank who joins is your tank, even though the game marks everyone as DPS by default. Nothing waits for a role check: the next invite goes out as soon as someone has joined.
 - A pending invite counts as a taken seat. Once a tank is invited or in the group, no other tank is asked.
 - Each invite goes out together with its whisper, by default `Hi, do you wanna join for <dungeon> as <role> ?`, so "as tank", "as healer" or "as dps". You can edit the text; `<dungeon>`, `<role>` and `<name>` are filled in for each player.
 - An unanswered invite closes itself on the other side after 60 seconds and comes back as a decline. If no answer arrives at all, EasyLFG gives up after 90 seconds (adjustable, at least 70).
-- **Role check:** as soon as an invited tank or healer has joined, EasyLFG starts a role check so everyone confirms their role. It never starts one otherwise, except with `/elfg rolecheck`. The role picked there counts over the role the player was invited for. If someone picks another role (say a druid invited as tank picks healer), you're told, the seat they were invited for opens again, and auto mode invites a new player for it. This happens even if the group had just been reported complete. `/elfg rolecheck` starts one by hand.
+- **One role check, once the group is full**, so the game shows everyone's role. If someone picks a different role there than the one they were invited for (say a druid invited as tank picks healer), you're told in chat, but EasyLFG keeps counting them as invited and invites nobody new. Players EasyLFG didn't invite, such as friends already in your group, count as the game shows them. `/elfg rolecheck` starts a role check by hand.
 - **Your role in the role check popup** is already selected for you: the role you chose as "I am" in EasyLFG, not the game's default DPS. Just click Accept. If your class can't play the "I am" role, the popup is left as it is.
 - **"I am" only changes in the EasyLFG window.** The game marking you DPS, or picking another role in a role check, never frees your seat. If you pick a different role in a role check, EasyLFG tells you in chat so you can change "I am" if you meant it.
 - Players who declined or did not answer are not invited again this session. Use `/elfg forget`, or click the player in the list, to allow them again.
@@ -28,11 +28,19 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 ## Use
 
 - `/elfg` opens the window. There is also an **EasyLFG** button in Blizzard's Group Finder.
+- **The Group panel**, beside the window, shows the group being formed, one line per seat: tanks first, then healers, then DPS. Each line shows the role icon and the player's name, then where that seat stands:
+  - **you**;
+  - **in group**;
+  - **joining**: accepted, but the game doesn't show them in the group yet;
+  - **invited**, with the seconds left for an answer;
+  - **wanted**, for a seat still open.
+
+  Its title shows the group size, then "complete" or "auto". It sits on the window's right, or on its left when the screen has no room.
 - **Search** asks the Group Finder for your dungeon. Searches made in Blizzard's own window are used too.
 - The **+** button on a player's row whispers and invites that player, for the open role they fit, then refreshes the list.
-  - It's greyed out when the player doesn't fit your rules, while another invite waits for its answer, or while a tank or healer who just joined hasn't confirmed their role. Hovering it says why.
+  - It's greyed out when the player doesn't fit your rules, or while another invite waits for its answer. Hovering it says why.
   - Clicking the row offers "Invite anyway" for players outside the rules.
-- **Start auto** keeps going on its own until the group is complete. As soon as a player declines, is already in a group, can't be found, doesn't answer, or has joined (as a tank or healer: once they've confirmed their role), the next player is invited right away. New search results are used straight away too.
+- **Start auto** keeps going on its own until the group is complete. As soon as a player declines, is already in a group, can't be found, doesn't answer, or has joined, the next player is invited right away. New search results are used straight away too.
 - Key bindings are under *Key Bindings > AddOns > EasyLFG*.
 
 **Keeping the list fresh:** after every invite, EasyLFG searches the Group Finder again (for your dungeon only).
@@ -60,7 +68,7 @@ The **Log** button (or `/elfg log`) shows every action EasyLFG took, one timesta
 - each search and what it found;
 - each invite, with the exact whisper sent;
 - each answer, and how long it took;
-- role checks, the roles picked in them, and how long EasyLFG waited for each joiner's role;
+- role checks and the roles picked in them;
 - auto mode turning on and off;
 - anything the game blocked, and any errors.
 

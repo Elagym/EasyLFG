@@ -9,6 +9,8 @@ ns.UI = UI
 local FRAME_WIDTH, FRAME_HEIGHT = 580, 650
 local ROW_HEIGHT = 20
 local LIST_TOP = -392
+local PARTY_WIDTH = 230 -- the group panel beside the window
+local PARTY_ROW = 18
 
 local frame
 local widgets = { roles = {}, rows = {} }
@@ -542,6 +544,64 @@ local function buildList()
 	widgets.empty:SetJustifyV("TOP")
 end
 
+-- The group being formed: a small panel beside the window, one line per seat.
+local function buildParty()
+	local panel = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+	panel:SetBackdrop({
+		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+		edgeSize = 16,
+		insets = { left = 4, right = 4, top = 4, bottom = 4 },
+	})
+	panel:SetBackdropColor(0.06, 0.06, 0.09, 0.96)
+	panel:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+	panel:SetSize(PARTY_WIDTH, 40 + ns.MAX_PARTY * PARTY_ROW)
+	panel:EnableMouse(true)
+	widgets.party = panel
+
+	widgets.partyTitle = newLabel(panel, "Group", "GameFontNormal")
+	widgets.partyTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -12)
+	widgets.partyTitle:SetPoint("RIGHT", panel, "RIGHT", -12, 0)
+
+	widgets.partyRows = {}
+	for index = 1, ns.MAX_PARTY + 2 do
+		local row = CreateFrame("Frame", nil, panel)
+		row:SetHeight(PARTY_ROW)
+		row:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -32 - (index - 1) * PARTY_ROW)
+		row:SetPoint("RIGHT", panel, "RIGHT", -10, 0)
+		row.role = newLabel(row, "", "GameFontHighlightSmall")
+		row.role:SetPoint("LEFT", row, "LEFT", 0, 0)
+		row.role:SetWidth(18)
+		row.name = newLabel(row, "", "GameFontHighlightSmall")
+		row.name:SetPoint("LEFT", row, "LEFT", 20, 0)
+		row.name:SetWidth(112)
+		row.name:SetWordWrap(false)
+		row.state = newLabel(row, "", "GameFontHighlightSmall")
+		row.state:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+		row.state:SetWidth(78)
+		row.state:SetJustifyH("RIGHT")
+		row:Hide()
+		widgets.partyRows[index] = row
+	end
+end
+
+-- Beside the window on the right, or on the left when the screen has no room there.
+local function placeParty()
+	local panel = widgets.party
+	local right = frame:GetRight()
+	local screen = UIParent:GetRight()
+	local side = (right and screen and right + PARTY_WIDTH > screen) and "LEFT" or "RIGHT"
+	if panel.side ~= side then
+		panel.side = side
+		panel:ClearAllPoints()
+		if side == "RIGHT" then
+			panel:SetPoint("TOPLEFT", frame, "TOPRIGHT", -2, 0)
+		else
+			panel:SetPoint("TOPRIGHT", frame, "TOPLEFT", 2, 0)
+		end
+	end
+end
+
 local function restorePosition()
 	frame:ClearAllPoints()
 	local saved = ns.db and ns.db.window
@@ -567,6 +627,7 @@ local function build()
 		self:StopMovingOrSizing()
 		local point, _, relativePoint, x, y = self:GetPoint()
 		ns.db.window = { point = point, relativePoint = relativePoint, x = x, y = y }
+		placeParty()
 	end)
 	frame:SetBackdrop({
 		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -596,6 +657,7 @@ local function build()
 	buildSettings()
 	buildActions()
 	buildList()
+	buildParty()
 
 	-- A countdown while an invite waits; cheap, and only while the window is open.
 	local elapsed = 0
@@ -603,8 +665,9 @@ local function build()
 		elapsed = elapsed + delta
 		if elapsed >= 1 then
 			elapsed = 0
-			if next(ns.Inviter.pending) or next(ns.Inviter.awaiting) then
+			if next(ns.Inviter.pending) then
 				UI.RefreshStatus()
+				UI.RefreshParty()
 			end
 		end
 	end)
@@ -647,14 +710,6 @@ function UI.RefreshStatus()
 	end
 	if #waiting > 0 then
 		text = "Waiting for " .. table.concat(waiting, ", ")
-	else
-		for _, entry in ipairs(ns.Inviter.AwaitingRoles()) do
-			local left = math.max(0, math.floor(entry.deadline - GetTime()))
-			waiting[#waiting + 1] = ("%s (%d s)"):format(entry.name, left)
-		end
-		if #waiting > 0 then
-			text = "Role check: waiting for " .. table.concat(waiting, ", ") .. " to confirm their role"
-		end
 	end
 	widgets.status:SetText(text)
 end
@@ -675,6 +730,99 @@ local function refreshGroup()
 		text = text .. ("  |cff888888(%d unknown = DPS)|r"):format(state.unknownRoles)
 	end
 	widgets.group:SetText(text)
+end
+
+-- The seats of the group being formed, tanks first, then healers, then DPS: you, the members,
+-- the invites waiting for an answer, then the seats still open. Each is { role, name, class,
+-- kind, left }, kind being "you", "ingroup", "joining", "invited" or "open"; `left` is the
+-- seconds an invite still has.
+function UI.GroupSlots(state)
+	state = state or ns.Finder.GroupState()
+	local byRole = { TANK = {}, HEALER = {}, DAMAGER = {} }
+	local myRole = ns.ROLE_LABEL[ns.settings.myRole] and ns.settings.myRole or "DAMAGER"
+	byRole[myRole][1] = { role = myRole, name = ns.ReadUnitName("player") or "You",
+		class = ns.Readable((select(2, UnitClass("player")))), kind = "you" }
+	for _, member in ipairs(state.members) do
+		local list = byRole[member.role] or byRole.DAMAGER
+		list[#list + 1] = { role = member.role, name = member.name, class = member.class,
+			kind = member.joining and "joining" or "ingroup", guessed = not member.known }
+	end
+	local limit = ns.Clamp(ns.settings.timeout, ns.MIN_TIMEOUT, ns.MAX_TIMEOUT)
+	for role, invite in pairs(state.pending) do
+		local list = byRole[role]
+		list[#list + 1] = { role = role, name = invite.name, class = invite.class, kind = "invited",
+			left = math.max(0, limit - math.floor(GetTime() - invite.sentAt)) }
+	end
+	-- Open seats, as many as still wanted and as the group has room for.
+	local free = state.free
+	for _, role in ipairs(ns.ROLES) do
+		for _ = 1, state.remaining[role] do
+			if free <= 0 then
+				break
+			end
+			free = free - 1
+			local list = byRole[role]
+			list[#list + 1] = { role = role, kind = "open" }
+		end
+	end
+	local slots = {}
+	for _, role in ipairs(ns.ROLES) do
+		for _, slot in ipairs(byRole[role]) do
+			slots[#slots + 1] = slot
+		end
+	end
+	return slots
+end
+
+local SLOT_STATE = {
+	you = "|cff909090you|r",
+	ingroup = "|cff60ff60in group|r",
+	joining = "|cff80c0ffjoining|r",
+	open = "|cff707070open|r",
+}
+
+function UI.RefreshParty()
+	if not widgets.party then
+		return
+	end
+	placeParty()
+	local state = ns.Finder.GroupState()
+	local slots = UI.GroupSlots(state)
+	for index, row in ipairs(widgets.partyRows) do
+		local slot = slots[index]
+		if slot then
+			local icon = roleIcon(slot.role) or ""
+			if slot.kind == "open" then
+				row.role:SetText(icon)
+				row.role:SetAlpha(0.4)
+				row.name:SetText(("|cff707070%s wanted|r"):format(ns.ROLE_LABEL[slot.role]))
+			else
+				row.role:SetText(icon)
+				row.role:SetAlpha(1)
+				local name = (tostring(slot.name):gsub("%-", " "))
+				row.name:SetText(slot.class and ns.Colored(name, slot.class) or name)
+			end
+			if slot.kind == "invited" then
+				row.state:SetText(("|cffffd100invited %d s|r"):format(slot.left or 0))
+			elseif slot.kind == "ingroup" and slot.guessed then
+				row.state:SetText("|cff60ff60in group|r |cff888888(?)|r")
+			else
+				row.state:SetText(SLOT_STATE[slot.kind] or "")
+			end
+			row.slot = slot
+			row:Show()
+		else
+			row.slot = nil
+			row:Hide()
+		end
+	end
+	local title = ("Group %d/%d"):format(state.size, ns.MAX_PARTY)
+	if state.complete then
+		title = title .. "  |cff60ff60complete|r"
+	elseif ns.Inviter.auto then
+		title = title .. "  |cffffd100auto|r"
+	end
+	widgets.partyTitle:SetText(title)
 end
 
 local function refreshList()
@@ -755,6 +903,7 @@ function UI.Refresh()
 	widgets.auto:SetText(ns.Inviter.auto and "Stop auto" or "Start auto")
 	refreshGroup()
 	UI.RefreshStatus()
+	UI.RefreshParty()
 	refreshList()
 end
 

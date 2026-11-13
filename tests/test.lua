@@ -105,29 +105,25 @@ ok, msg = Inviter.InviteRound(true)
 report("healer before dps", ok and #M.invites == 2 and Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Garlick Naan" and Inviter.pending.DAMAGER == nil, msg)
 report("healer whisper says as healer", M.whispers[2].target == "Garlick Naan" and M.whispers[2].text == "Hi, do you wanna join for Deadmines as healer ?", M.whispers[2].text)
 
--- 7. Healer joins; the game shows DPS until they answer the role check: never a second healer ----------
+-- 7. Healer joins: counted as healer by name at once, whatever the game shows; no wait, no role check --
 local polls = M.rolePolls
 M.Fire("CHAT_MSG_SYSTEM", "Garlick Naan joins the party.")
 report("healer joined", Inviter.pending.HEALER == nil and EasyLFGDB.memberRoles["garlick-naan"].role == "HEALER")
-report("waiting for the healer's role", Inviter.Busy() == "rolecheck")
--- A default role before the role check is not their answer.
+report("no wait after a healer joins", Inviter.Busy() == nil)
+-- The game's default role for a joiner changes nothing and is not reported in chat.
 M.Fire("ROLE_CHANGED_INFORM", "Garlick Naan", "", "NONE", "DAMAGER")
-report("early default role ignored", EasyLFGDB.memberRoles["garlick-naan"].chosen == nil and Finder.Evaluate().filled.HEALER == 1)
+report("game's default role ignored", Finder.Evaluate().filled.HEALER == 1 and not M.PrintsContain("Garlick Naan picked"))
 M.Join("Garlick", "Naan", "PRIEST", "DAMAGER") -- surname in the realm slot, DPS shown by default
 M.Fire("GROUP_ROSTER_UPDATE")
-report("role check once in the roster", M.rolePolls == polls + 1, M.rolePolls - polls)
+M.Advance(6)
+report("no role check before the group is full", M.rolePolls == polls, M.rolePolls - polls)
 state = Finder.Evaluate()
 report("counted as healer, not the game's default dps", state.filled.HEALER == 1 and state.filled.DAMAGER == 1, state.filled.DAMAGER)
 M.AddListing({ name = "Holy Paly", class = "PALADIN", level = 30, healer = true })
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 report("second healer not wanted", find("Holy Paly").reason == "no Healer needed", find("Holy Paly").reason)
 ok, msg = Inviter.InviteRound(true)
-report("no invite before the role check answer", not ok and #M.invites == 2 and msg:find("confirm their role"), msg)
-M.party[1].role = "HEALER"
-M.Fire("ROLE_CHANGED_INFORM", "Garlick Naan", "Garlick Naan", "DAMAGER", "HEALER")
-report("role check done", Inviter.Busy() == nil and EasyLFGDB.memberRoles["garlick-naan"].chosen == "HEALER")
-ok, msg = Inviter.InviteRound(true)
-report("then the best dps", ok and M.invites[3] == "Rogue One" and #M.invites == 3, msg)
+report("next invite at once: the best dps", ok and M.invites[3] == "Rogue One" and #M.invites == 3, msg)
 
 -- 8. A DPS joins: no role check (everyone is DPS by default), the next invite may go out at once ---------
 polls = M.rolePolls
@@ -171,31 +167,27 @@ M.AddListing({ name = "Fire Mage", class = "MAGE", level = 23, dps = true })
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 report("new results: the tank first, alone", Inviter.pending.TANK and Inviter.pending.TANK.name == "Big Bear" and Inviter.pending.DAMAGER == nil, #M.invites)
 report("one invite only", #M.invites == 7, #M.invites)
--- The join message comes before the roster: the seat stays taken, and nothing goes out before the
--- role check is answered.
+-- The join message comes before the roster: the seat stays taken. A tank joining needs no wait.
 M.AddListing({ name = "Extra Dps", class = "HUNTER", level = 40, dps = true })
-M.Fire("CHAT_MSG_SYSTEM", "Big Bear joins the party.")
-M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED") -- auto mode tries here as well
-state = Finder.Evaluate()
-report("joiner's seat held before the roster", state.remaining.TANK == 0 and Inviter.pending.TANK == nil and #M.invites == 7, #M.invites)
-report("a matching dps waits for the role check", find("Extra Dps").status == "match" and #M.invites == 7)
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED") -- the bear's invite still waits: nothing sent
+report("a matching dps waits for the tank's answer", find("Extra Dps").status == "match" and #M.invites == 7)
 polls = M.rolePolls
-M.Join("Big", "Bear", "DRUID", "NONE")
+M.Fire("CHAT_MSG_SYSTEM", "Big Bear joins the party.")
+state = Finder.Evaluate()
+report("joiner's seat held before the roster", state.remaining.TANK == 0 and Inviter.pending.TANK == nil)
+report("tank joined: auto invites the best dps at once", Inviter.pending.DAMAGER and Inviter.pending.DAMAGER.name == "Extra Dps" and #M.invites == 8, M.invites[8])
+M.Join("Big", "Bear", "DRUID", "DAMAGER")
 M.Fire("GROUP_ROSTER_UPDATE")
 report("held seat released once in the roster", next(Inviter.joining) == nil)
-report("role check for the bear", M.rolePolls == polls + 1 and #M.invites == 7)
--- The bear never answers: after 30 s EasyLFG counts them as the tank they were invited as.
-M.Advance(29)
-report("still waiting for the bear at 29 s", #M.invites == 7 and Inviter.Busy() == "rolecheck")
-M.Advance(2)
-report("wait over: auto invites the best dps", Inviter.pending.DAMAGER and Inviter.pending.DAMAGER.name == "Extra Dps" and #M.invites == 8, M.invites[8])
+report("no role check for the bear", M.rolePolls == polls, M.rolePolls - polls)
 report("bear counted as tank", Finder.Evaluate().filled.TANK == 1)
-polls = M.rolePolls
 M.Fire("CHAT_MSG_SYSTEM", "Extra Dps joins the party.")
+report("no role check before the roster shows the last one", M.rolePolls == polls)
 M.Join("Extra", "Dps", "HUNTER", "NONE")
 M.Fire("GROUP_ROSTER_UPDATE")
+report("group full: one role check", M.rolePolls == polls + 1, M.rolePolls - polls)
 M.Advance(6)
-report("last dps joins: no role check", M.rolePolls == polls)
+report("only one", M.rolePolls == polls + 1, M.rolePolls - polls)
 state = Finder.Evaluate()
 report("group complete", state.complete and state.size == 5, state.size)
 report("auto off when complete", Inviter.auto == false)
@@ -414,7 +406,6 @@ Finder.silentFails = 0
 Finder.autoSearches = 0
 wipe(Inviter.pending)
 wipe(Inviter.joining)
-wipe(Inviter.awaiting)
 wipe(ns.asked)
 M.party = {}
 M.ClearListings()
@@ -506,11 +497,10 @@ M.Advance(30)
 report("window closed: no more searching", #M.searches == searches)
 report("no errors after refresh tests", ns.lastError == nil, ns.lastError)
 
--- 22. Role checks ------------------------------------------------------------------------------------
+-- 22. Role checks: none while the group fills, one once it is full; the invited role always counts --
 Inviter.Stop()
 wipe(Inviter.pending)
 wipe(Inviter.joining)
-wipe(Inviter.awaiting)
 wipe(ns.asked)
 wipe(EasyLFGDB.memberRoles)
 M.party = {}
@@ -525,53 +515,57 @@ ok, msg = Inviter.Start()
 report("tank invited, healer waits its turn", Inviter.pending.TANK and Inviter.pending.TANK.name == "Bear Tank" and Inviter.pending.HEALER == nil, msg)
 polls = M.rolePolls
 M.Fire("CHAT_MSG_SYSTEM", "Bear Tank joins the party.")
-report("no role check before the roster shows the tank", M.rolePolls == polls)
-report("no healer invite before the tank's role check", Inviter.pending.HEALER == nil)
-M.Join("Bear", "Tank", "DRUID", "NONE")
+report("tank joined: healer invited at once", Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Holy Priest")
+M.Join("Bear", "Tank", "DRUID", "DAMAGER")
 M.Fire("GROUP_ROSTER_UPDATE")
-report("role check once the tank is in the roster", M.rolePolls == polls + 1, M.rolePolls - polls)
+M.Advance(6)
+report("no role check while the group fills", M.rolePolls == polls, M.rolePolls - polls)
+report("tank counted as tank by name, though the game shows dps", Finder.Evaluate().filled.TANK == 1)
+M.Fire("CHAT_MSG_SYSTEM", "Holy Priest joins the party.")
+M.Join("Holy", "Priest", "PRIEST", "DAMAGER")
+M.Fire("GROUP_ROSTER_UPDATE")
+report("group full: one role check, auto off", M.rolePolls == polls + 1 and Inviter.auto == false, M.rolePolls - polls)
 
--- The druid picks healer: the tank seat opens again and auto mode fills it, tank first.
+-- The druid picks healer in it: still counted as the tank, you are told, nobody new is invited.
 M.AddListing({ name = "Spare Tank", class = "WARRIOR", level = 30, tank = true })
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-report("tank seat still taken before the answer", Inviter.PendingCount() == 0 and find("Spare Tank").status == "nofit")
 M.party[1].role = "HEALER"
-M.Fire("ROLE_CHANGED_INFORM", "Bear Tank", "Bear Tank", "NONE", "HEALER")
-report("answer stored", EasyLFGDB.memberRoles["bear-tank"].chosen == "HEALER")
-report("you are told the seat reopened", M.PrintsContain("Bear Tank picked Healer in the role check (invited as Tank)"))
-report("new tank invited right away", Inviter.pending.TANK and Inviter.pending.TANK.name == "Spare Tank" and Inviter.pending.HEALER == nil)
+M.Fire("ROLE_CHANGED_INFORM", "Bear Tank", "Bear Tank", "DAMAGER", "HEALER")
+M.Fire("PLAYER_ROLES_ASSIGNED")
 state = Finder.Evaluate()
-report("answer counts over the invited role", state.filled.HEALER == 1 and state.filled.TANK == 1 and state.complete, state.filled.TANK)
-report("the priest is no longer needed", find("Holy Priest").reason == "group complete", find("Holy Priest").reason)
+report("a different answer: still counted as invited", state.filled.TANK == 1 and state.filled.HEALER == 1 and state.complete, state.filled.TANK)
+report("you are told", M.PrintsContain("Bear Tank picked Healer in the role check, but was invited as Tank"))
+report("no new tank invited", Inviter.PendingCount() == 0 and Inviter.auto == false)
 
--- Group complete, then a role check reopens a seat: auto mode comes back.
-M.Fire("CHAT_MSG_SYSTEM", "Spare Tank joins the party.")
-M.Join("Spare", "Tank", "WARRIOR", "NONE")
+-- Someone leaves and a friend fills the seat: full again, so a new role check.
+table.remove(M.party, 2)
 M.Fire("GROUP_ROSTER_UPDATE")
-report("not complete before the spare tank's role check", Inviter.auto == true and Inviter.Busy() == "rolecheck")
-local pollsBefore = M.rolePolls
+report("not full after a leave", not Finder.Evaluate().done)
 M.Advance(6)
-report("role check for the new tank too", M.rolePolls > pollsBefore)
-M.party[2].role = "TANK"
-M.Fire("ROLE_CHANGED_INFORM", "Spare Tank", "Spare Tank", "NONE", "TANK")
-state = Finder.Evaluate()
-report("complete with the spare tank", state.complete and Inviter.auto == false)
-M.AddListing({ name = "Last Tank", class = "PALADIN", level = 30, tank = true })
+polls = M.rolePolls
+M.Join("Friend", "Heal", "SHAMAN", "HEALER")
+M.Fire("GROUP_ROSTER_UPDATE")
+report("full again: a new role check", M.rolePolls == polls + 1, M.rolePolls - polls)
+
+-- Someone EasyLFG did not invite counts as the game shows: picking DPS opens the healer seat, and
+-- auto mode, stopped by the full group a moment ago, comes back to fill it.
+M.ClearListings()
+M.AddListing({ name = "Last Healer", class = "PALADIN", level = 30, healer = true })
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 M.party[2].role = "DAMAGER"
-M.Fire("ROLE_CHANGED_INFORM", "Spare Tank", "Spare Tank", "TANK", "DAMAGER")
+M.Fire("ROLE_CHANGED_INFORM", "Friend Heal", "Friend Heal", "HEALER", "DAMAGER")
 report("too many dps flagged", M.PrintsContain("You now have 2 DPS for 1 wanted"))
 report("auto mode back on", Inviter.auto == true and M.PrintsContain("auto invite is back on"))
-report("seat filled again", Inviter.pending.TANK and Inviter.pending.TANK.name == "Last Tank")
+report("seat filled again", Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Last Healer")
 
--- Stopped by you: a role check never turns auto mode back on.
+-- Stopped by you: a role change never turns auto mode back on.
 Inviter.Stop()
 wipe(Inviter.pending)
-M.party[2].role = "TANK"
-M.Fire("ROLE_CHANGED_INFORM", "Spare Tank", "Spare Tank", "DAMAGER", "TANK")
+M.party[2].role = "HEALER"
+M.Fire("ROLE_CHANGED_INFORM", "Friend Heal", "Friend Heal", "DAMAGER", "HEALER")
 M.party[2].role = "DAMAGER"
-M.Fire("ROLE_CHANGED_INFORM", "Spare Tank", "Spare Tank", "TANK", "DAMAGER")
-report("stopped stays stopped", Inviter.auto == false and Inviter.pending.TANK == nil)
+M.Fire("ROLE_CHANGED_INFORM", "Friend Heal", "Friend Heal", "HEALER", "DAMAGER")
+report("stopped stays stopped", Inviter.auto == false and Inviter.pending.HEALER == nil)
 
 -- The game's default role for you never changes "I am"; a role you pick yourself does.
 ns.settings.myRole = "TANK"
@@ -585,7 +579,6 @@ report("my own role check answer does not change I am either", ns.settings.myRol
 report("you are told about the mismatch", M.PrintsContain("You picked Healer in the role check, but EasyLFG still counts you as Tank"))
 -- The case seen in-game: you are the tank, a quick Accept on DPS must not open the tank seat.
 wipe(Inviter.pending)
-wipe(Inviter.awaiting)
 wipe(ns.asked)
 Finder.searchNeedsClick = true
 M.ClearListings()
@@ -659,7 +652,6 @@ ns.settings.roles.TANK.need = 1
 Inviter.Stop()
 wipe(Inviter.pending)
 wipe(Inviter.joining)
-wipe(Inviter.awaiting)
 wipe(EasyLFGDB.memberRoles)
 M.party = {}
 M.Join("Tank", "Guy", "WARRIOR", "TANK") -- picked tank in a role check
@@ -718,17 +710,15 @@ report("log: automatic searches refused", logHas("Automatic searches refused"))
 report("log: blocked", logHas("The game blocked C_LFGList.Search()"))
 report("log: invite failure", logHas("Invite to Fail Guy as Tank FAILED"))
 report("log: auto on/off", logHas("Auto invite ON") and logHas("Auto invite OFF (stopped)") and logHas("Auto invite OFF (group complete)"))
-report("log: group complete with members", logHas("Group complete (5 players): you DPS") and logHas("Healer Bear Tank"))
-report("log: role check started", logHas("Role check started (Garlick Naan joined as Healer)"))
-report("log: early default role", logHas("Garlick Naan was set to DPS before the role check; still counted as Healer until they answer"))
-report("log: role check done", logHas("Role check done for Garlick Naan: Healer (invited as Healer"))
+report("log: group complete with members", logHas("Group complete (5 players): you DPS") and logHas("Tank Big Bear"))
+report("log: role check started", logHas("Role check started (group complete)"))
+report("log: game default role for a joiner", logHas("The game set Garlick Naan to DPS; counted as Healer (invited as Healer)"))
 report("log: popup pre-selected", logHas("Role check popup: Tank pre-selected (your EasyLFG role)"))
 report("log: game default kept out of I am", logHas("The game set your role to DPS; EasyLFG keeps you as Tank"))
-report("log: role check timed out", logHas("Role check timed out: no role check answer from Big Bear after 30 s; counted as Tank"), logShow())
 report("log: role check by hand", logHas("Role check started (by hand)"))
-report("log: role answer differs", logHas("Role check: Bear Tank picked Healer but was invited as Tank; the Tank seat is open again"))
+report("log: role answer differs", logHas("Role check: Bear Tank picked Healer but was invited as Tank; still counted as Tank"))
 report("log: too many", logHas("Too many DPS: 2 for 1 wanted"))
-report("log: auto back on", logHas("Auto invite ON again (a role check reopened a seat)"))
+report("log: auto back on", logHas("Auto invite ON again (a role change reopened a seat)"))
 report("log: skip by hand", logHas("Skipped Menu Man by hand"))
 report("log: forget", logHas("Forgot every answer and skip"))
 local colored = false
@@ -773,7 +763,6 @@ report("no errors after log tests", ns.lastError == nil, ns.lastError)
 Inviter.Stop()
 wipe(Inviter.pending)
 wipe(Inviter.joining)
-wipe(Inviter.awaiting)
 wipe(ns.asked)
 wipe(EasyLFGDB.memberRoles)
 wipe(Finder.skipped)
@@ -833,13 +822,8 @@ M.Fire("CHAT_MSG_SYSTEM", "Flex Druid joins the party.")
 M.Join("Flex", "Druid", "DRUID", "DAMAGER")
 M.Fire("GROUP_ROSTER_UPDATE")
 ns.UI.Refresh()
-report("joined: + off until the role check is answered", rowOf("Plus Dps").invite.enabled == false and rowOf("Plus Dps").invite.why:find("confirm their role"), rowOf("Plus Dps").invite.why)
-ns.UI.RefreshStatus()
-report("status shows the role check wait", findFrame(function(f) return type(f.text) == "string" and f.text:find("^Role check: waiting for Flex Druid") end) ~= nil)
-M.party[1].role = "TANK"
-M.Fire("PLAYER_ROLES_ASSIGNED")
-ns.UI.Refresh()
-report("a role change seen in the roster counts as the answer", Inviter.Busy() == nil and rowOf("Plus Dps").invite.enabled == true)
+report("tank joined: + on again at once", Inviter.Busy() == nil and rowOf("Plus Dps").invite.enabled == true, rowOf("Plus Dps").invite.why)
+report("counted as tank though the game shows dps", Finder.Evaluate().filled.TANK == 1)
 M.party = {}
 M.Fire("GROUP_ROSTER_UPDATE")
 M.Join("Some", "Body", "PRIEST", "NONE")
@@ -849,6 +833,72 @@ report("not the leader: + off", rowOf("Plus Dps").invite.enabled == false and ro
 M.leader = true
 M.party = {}
 report("no errors after + tests", ns.lastError == nil, ns.lastError)
+
+-- 26. The group panel beside the window ------------------------------------------------------------
+Inviter.Stop()
+wipe(Inviter.pending)
+wipe(Inviter.joining)
+wipe(ns.asked)
+wipe(EasyLFGDB.memberRoles)
+M.party = {}
+M.leader = true
+ns.settings.myRole = "DAMAGER"
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need, ns.settings.roles.DAMAGER.need = 1, 1, 3
+Finder.searchNeedsClick = true
+Finder.searching = false
+M.Join("Panel", "Tank", "WARRIOR", "DAMAGER") -- invited as tank; the game shows DPS
+EasyLFGDB.memberRoles["panel-tank"] = { name = "Panel Tank", role = "TANK", time = time() }
+M.ClearListings()
+M.AddListing({ name = "Panel Heal", class = "PRIEST", level = 30, healer = true })
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+M.Advance(6)
+ok, msg = Inviter.InviteRound(true)
+report("panel: healer invited", ok and Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Panel Heal", msg)
+Inviter.joining["late-dps"] = { name = "Late Dps", role = "DAMAGER", class = "ROGUE", at = GetTime() }
+
+local function slotKinds()
+	local parts = {}
+	for _, slot in ipairs(ns.UI.GroupSlots()) do
+		parts[#parts + 1] = slot.role .. ":" .. slot.kind
+	end
+	return table.concat(parts, " ")
+end
+local kinds = slotKinds()
+report("panel: seats in role order with their state", kinds == "TANK:ingroup HEALER:invited DAMAGER:you DAMAGER:joining DAMAGER:open", kinds)
+
+local function textHas(text)
+	return findFrame(function(f) return type(f.text) == "string" and f.text:find(text, 1, true) end) ~= nil
+end
+EasyLFGFrame:Show()
+ns.UI.Refresh()
+report("panel: title with the group size", textHas("Group 4/5"))
+report("panel: member named, as the role they were invited for", textHas("Panel Tank") and textHas("in group"))
+report("panel: pending invite with its countdown", textHas("Panel Heal") and textHas("invited 90 s"))
+report("panel: joiner not in the roster yet", textHas("Late Dps") and textHas("joining"))
+report("panel: open seat", textHas("DPS wanted"))
+M.Advance(5)
+EasyLFGFrame.scripts.OnUpdate(EasyLFGFrame, 1)
+report("panel: countdown runs", textHas("invited 85 s"))
+
+M.Fire("CHAT_MSG_SYSTEM", "Panel Heal declines your group invitation.")
+kinds = slotKinds()
+report("panel: a decline opens the seat again", kinds == "TANK:ingroup HEALER:open DAMAGER:you DAMAGER:joining DAMAGER:open", kinds)
+report("panel: open healer seat shown", textHas("Healer wanted"))
+
+-- A full group: no open seat beyond the five places, and complete in the title.
+wipe(Inviter.joining)
+M.Join("Heal", "Er", "PRIEST", "HEALER")
+M.Join("Dps", "One", "ROGUE", "DAMAGER")
+M.Join("Dps", "Two", "MAGE", "DAMAGER")
+M.Fire("GROUP_ROSTER_UPDATE")
+kinds = slotKinds()
+report("panel: full group, five seats", kinds == "TANK:ingroup HEALER:ingroup DAMAGER:you DAMAGER:ingroup DAMAGER:ingroup", kinds)
+ns.UI.Refresh()
+report("panel: complete shown", textHas("Group 5/5") and textHas("complete"))
+EasyLFGFrame:Hide()
+M.party = {}
+M.Fire("GROUP_ROSTER_UPDATE")
+report("no errors after panel tests", ns.lastError == nil, ns.lastError)
 
 out(("%d passed, %d failed"):format(passed, failed))
 if failed > 0 then

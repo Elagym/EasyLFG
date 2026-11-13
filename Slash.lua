@@ -13,7 +13,7 @@ end
 
 BINDING_HEADER_EASYLFG = "EasyLFG"
 BINDING_NAME_EASYLFG_TOGGLE = "Show or hide the window"
-BINDING_NAME_EASYLFG_INVITE_NEXT = "Invite (one player per open role)"
+BINDING_NAME_EASYLFG_INVITE_NEXT = "Invite the next matching player"
 BINDING_NAME_EASYLFG_SEARCH = "Search the Group Finder"
 
 function EasyLFG_Toggle()
@@ -128,13 +128,9 @@ local function printDebug()
 	local rc = Inviter.roleCheck
 	print(("  Role checks: InitiateRolePoll %s, %d started (last %s, result %s), %d answers (last %s), wanted %s"):format(
 		yes(InitiateRolePoll), rc.started, ago(rc.lastAt), tostring(rc.result), rc.answers, tostring(rc.lastAnswer), tostring(rc.wanted)))
+	print(("  Role check when the group is full: done for this group %s"):format(yes(Inviter.finalCheckAsked)))
 	print(("  Role check popup: pre-selects %s, hook %s, refused by the game %s"):format(
 		ns.ROLE_LABEL[ns.settings.myRole] or "?", yes(RolePollPopup_Show and hooksecurefunc), yes(Inviter.prefillBlocked)))
-	for _, entry in ipairs(Inviter.AwaitingRoles()) do
-		print(("    waiting for %s's role (invited as %s, joined %s, check started %s, %d s left)"):format(
-			entry.name, ns.ROLE_LABEL[entry.role], ago(entry.joinedAt), ago(entry.checkAt),
-			math.max(0, math.floor(entry.deadline - GetTime()))))
-	end
 	print(("  Last system message understood: %s"):format(tostring(Inviter.lastSystem)))
 	print(("  Last invite error: %s; last whisper error: %s"):format(tostring(Inviter.lastInviteError), tostring(Inviter.lastWhisperError)))
 	local blocked = {}
