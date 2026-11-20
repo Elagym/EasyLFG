@@ -128,8 +128,19 @@ function Demo.NewPlayer(role)
 			end
 		end
 	end
-	local base = ns.settings.roles[role] and ns.settings.roles[role].minLevel or 15
-	local level = chance(0.2) and base - random(1, 4) or base + random(0, 8)
+	-- Mostly within your rules; now and then too low, or too high when you set a max.
+	local rule = ns.settings.roles[role] or {}
+	local low = rule.minLevel or 15
+	local high = math.min(rule.maxLevel or ns.MAX_LEVEL, low + 8)
+	local roll = math.random()
+	local level
+	if roll < 0.2 then
+		level = low - random(1, 4)
+	elseif roll < 0.35 and (rule.maxLevel or ns.MAX_LEVEL) < ns.MAX_LEVEL then
+		level = rule.maxLevel + random(1, 6)
+	else
+		level = random(low, math.max(low, high))
+	end
 	nextID = nextID + 1
 	return {
 		id = "demo" .. nextID,

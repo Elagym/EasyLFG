@@ -8,7 +8,7 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 - Pick the **dungeon** from the Group Finder's own list, and your own role.
 - For each role (**Tank / Healer / DPS**), set:
   - how many you need,
-  - the **minimum level**,
+  - the **minimum and maximum level** (Min lvl / Max lvl). Picking a dungeon sets the min to the bottom of its level range, as shown in the dungeon menu, and the max to the top of that range + 2 (a 15-25 dungeon gives a max of 27). A dungeon with no known top level sets the max to 60, which means no limit. You can change them after. If you type a min above the max or a max below the min, the other one follows,
   - the **classes** you accept. Each role only offers the classes able to play it: Warrior, Paladin and Druid for tanks; Paladin, Priest, Shaman and Druid for healers; every class for DPS.
 - Optionally ask for **distinct classes only**.
 - EasyLFG only searches, and only reads, the listings for the dungeon you picked. Without a dungeon, it does neither.
@@ -23,7 +23,13 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 - **Your role in the role check popup** is already selected for you: the role you chose as "I am" in EasyLFG, not the game's default DPS. Just click Accept. If your class can't play the "I am" role, the popup is left as it is.
 - **"I am" only changes in the EasyLFG window.** The game marking you DPS, or picking another role in a role check, never frees your seat. If you pick a different role in a role check, EasyLFG tells you in chat so you can change "I am" if you meant it.
 - Players who declined or did not answer are not invited again this session. Use `/elfg forget`, or click the player in the list, to allow them again.
-- Every player in the list shows why they fit or don't, for example "level 15, DPS needs 17" or "Rogue already in the group".
+- **With [PlayerNotes](https://github.com/Elagym/PlayerNotes) installed** (version 1.10.0 or later), EasyLFG checks your notes on each player:
+  - **Caution** (only negative categories): never invited. Their row says why, for example "PlayerNotes: Caution (Griefer, Ninja)". "Invite anyway" in the row menu still works.
+  - **Mixed** and **Good**: invited as usual, with a yellow or green tag on their row.
+  - Hovering a row shows your note.
+
+  Without PlayerNotes, nothing changes.
+- Every player in the list shows why they fit or don't, for example "level 15, DPS needs 17", "level 30, DPS max 25" or "Rogue already in the group".
 
 ## Use
 
@@ -43,12 +49,15 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
 - **Start auto** keeps going on its own until the group is complete. As soon as a player declines, is already in a group, can't be found, doesn't answer, or has joined, the next player is invited right away. New search results are used straight away too.
 - Key bindings are under *Key Bindings > AddOns > EasyLFG*.
 
-**Keeping the list fresh:** after every invite, EasyLFG searches the Group Finder again (for your dungeon only).
-- **While nobody is listed for a role you still need**, it searches again every 2 seconds until someone is. It does this in auto mode, and also with auto off while the EasyLFG window is open. With auto off, you get a message and a sound when a match shows up ("Tank found: …"). In auto mode they're invited right away.
-- Otherwise, auto mode refreshes every 10 seconds while a seat is open.
-- EasyLFG never searches more than once every 2 seconds. If the server rejects a search (too many searches), automatic searches pause for 15 seconds.
+**Keeping the list fresh:** the game only allows a Group Finder search that comes straight from a click or a key press. A search EasyLFG starts on its own is refused, with the game's "blocked" error. So EasyLFG only searches when you ask:
+- the **Search** button or its key binding, which works with the window closed;
+- a click on **+**, which refreshes the list after the invite;
+- **Start auto**, which searches once if the list is older than 30 seconds.
 
-The game always allows a search from a click or a key press, so the refresh after a clicked **+** always works. Auto mode searches on its own, which the game may refuse. If it does, EasyLFG tells you once and stops trying for the session. Auto invites keep running, and **Search** (or its key binding) refreshes the list.
+Searches made in Blizzard's own Group Finder are read too. Opening the window never searches.
+- **Auto mode** invites from the list it has. When nobody is left to invite for a role, it tells you once in chat to press Search; the players your search finds are invited right away.
+- **With auto off**, when your search brings a player for a role nobody fit, you get a message and a sound ("Tank found: …").
+- A second search within 2 seconds of the last one is skipped, since the list is still fresh.
 
 | Command | |
 |---|---|

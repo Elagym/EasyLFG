@@ -115,18 +115,67 @@ end
 
 -- Picks the dungeon. The minimum levels follow the dungeon's suggested level; you can still change
 -- them afterwards.
+Finder.LEVEL_MARGIN = 2 -- levels above the top of the dungeon's range still accepted by default
+
+-- The default max level for a dungeon whose range ends at `top`.
+function Finder.DefaultMaxLevel(top)
+	return ns.Clamp(top + Finder.LEVEL_MARGIN, 1, ns.MAX_LEVEL)
+end
+
 function Finder.SetActivity(activity)
 	local s = ns.settings
 	s.activityID = activity.id
 	s.activityName = activity.name
 	s.categoryID = activity.categoryID
 	ns.Log(("Dungeon set: %s (activity %s)"):format(tostring(activity.name), tostring(activity.id)))
-	if activity.minLevel and activity.minLevel > 0 then
-		for _, role in ipairs(ns.ROLES) do
-			s.roles[role].minLevel = ns.Clamp(activity.minLevel, 1, ns.MAX_LEVEL)
+	-- The levels follow the dungeon's range, with LEVEL_MARGIN levels above its top; a dungeon
+	-- without a known top means no max.
+	local top = (activity.maxLevel and activity.maxLevel > 0) and Finder.DefaultMaxLevel(activity.maxLevel) or ns.MAX_LEVEL
+	for _, role in ipairs(ns.ROLES) do
+		local rule = s.roles[role]
+		if activity.minLevel and activity.minLevel > 0 then
+			rule.minLevel = ns.Clamp(activity.minLevel, 1, ns.MAX_LEVEL)
+		end
+		rule.maxLevel = math.max(top, rule.minLevel)
+	end
+	ns.db.maxLevelFromDungeon = nil
+	Finder.Scan()
+end
+
+-- Settings saved before the max followed the dungeon: each role still at no limit gets the default
+-- max of the chosen dungeon (the top of its range + LEVEL_MARGIN), once. Tried at load, and again when the window opens if the
+-- dungeon's info could not be read yet.
+function Finder.UpgradeMaxLevel()
+	local db = ns.db
+	if not db or not db.maxLevelFromDungeon then
+		return
+	end
+	local s = ns.settings
+	if not s.activityID then
+		db.maxLevelFromDungeon = nil
+		return
+	end
+	local info = Finder.ActivityInfo(s.activityID)
+	if not info then
+		return
+	end
+	db.maxLevelFromDungeon = nil
+	local top = tonumber(ns.Readable(info.maxLevelSuggestion)) or 0
+	if top <= 0 then
+		return
+	end
+	local max = Finder.DefaultMaxLevel(top)
+	local changed = false
+	for _, role in ipairs(ns.ROLES) do
+		local rule = s.roles[role]
+		if (rule.maxLevel or ns.MAX_LEVEL) >= ns.MAX_LEVEL and max >= rule.minLevel and max < ns.MAX_LEVEL then
+			rule.maxLevel = max
+			changed = true
 		end
 	end
-	Finder.Scan()
+	if changed then
+		ns.Log(("Max level set to %d: the top of %s's level range (%d) + %d"):format(max, s.activityName or "?", top, Finder.LEVEL_MARGIN))
+	end
 end
 
 -- The group ----------------------------------------------------------------------------------
@@ -343,6 +392,13 @@ local function askedText(record)
 	return text
 end
 
+Finder.notedLogged = {} -- players logged once this session as kept out by PlayerNotes
+
+local NOTE_TAG = {
+	mixed = "|cffffd040PlayerNotes: Mixed|r",
+	positive = "|cff40ff40PlayerNotes: Good|r",
+}
+
 -- Decides what to do with one candidate: c.role is set when they fit, c.reason says why or why not.
 function Finder.Judge(c, state)
 	local s = ns.settings
@@ -375,6 +431,16 @@ function Finder.Judge(c, state)
 		c.status, c.reason = "delisted", "listing closed"
 		return
 	end
+	-- Someone your PlayerNotes mark Caution is never invited (Invite anyway still can).
+	c.notes = ns.Notes(c.name)
+	if c.notes and c.notes.verdict == "negative" then
+		c.status, c.reason = "nofit", "PlayerNotes: " .. ns.NotesText(c.notes)
+		if c.key and not Finder.notedLogged[c.key] then
+			Finder.notedLogged[c.key] = true
+			ns.Log(("%s is marked %s in PlayerNotes: not invited"):format(c.name, ns.NotesText(c.notes)))
+		end
+		return
+	end
 	if state.done then
 		c.status, c.reason = "nofit", state.complete and "group complete" or "group full"
 		return
@@ -398,6 +464,8 @@ function Finder.Judge(c, state)
 				text = ("%s not wanted as %s"):format(ns.ClassName(c.class), label)
 			elseif c.level < (rule.minLevel or 1) then
 				text = ("level %d, %s needs %d"):format(c.level, label, rule.minLevel)
+			elseif c.level > (rule.maxLevel or ns.MAX_LEVEL) then
+				text = ("level %d, %s max %d"):format(c.level, label, rule.maxLevel)
 			elseif s.distinctClasses and state.classes[c.class] then
 				text = ("%s already in the group"):format(ns.ClassName(c.class))
 			end
@@ -421,6 +489,11 @@ function Finder.Judge(c, state)
 		c.reason = ("fits as %s"):format(table.concat(labels, " or ")) .. (c.guessedRole and " (no role listed)" or "")
 	else
 		c.status, c.reason = "nofit", problem or "does not fit"
+	end
+	-- Mixed or Good in PlayerNotes: shown, nothing more.
+	local tag = c.notes and NOTE_TAG[c.notes.verdict]
+	if tag then
+		c.reason = c.reason .. "  " .. tag
 	end
 end
 
@@ -523,16 +596,11 @@ end
 
 -- Searching ----------------------------------------------------------------------------------
 
--- The list is refreshed after every invite; while an open role has nobody listed, every
--- HUNT_REFRESH seconds until someone is (in auto mode, or while the window is open); and in auto
--- mode every AUTO_REFRESH seconds anyway. A search from a click or key press is always allowed.
--- One that is not may be refused by the game: then EasyLFG stops trying for the session and asks
--- for a click instead. A refusal shows up as ADDON_ACTION_BLOCKED or as a search that never
--- answers. A search the server answers with LFG_LIST_SEARCH_FAILED (busy, throttled) only pauses
--- automatic searches for FAIL_PAUSE seconds.
-Finder.MIN_SEARCH_GAP = 2 -- seconds between two searches EasyLFG starts itself
-Finder.HUNT_REFRESH = 2 -- seconds between searches while an open role has nobody listed
-Finder.AUTO_REFRESH = 10 -- seconds between refreshes in auto mode while a role is open
+-- The game (WoW Forever) refuses a Group Finder search that does not come straight from a click
+-- or a key press: it shows its "blocked" error, and the search never happens. So EasyLFG only
+-- searches when you ask: the Search button or key binding, a click on +, Start auto. Searches
+-- made in Blizzard's own Group Finder are read too. Nothing searches on a timer.
+Finder.MIN_SEARCH_GAP = 2 -- seconds: a second click this soon after a search finds the list fresh
 Finder.FAIL_PAUSE = 15 -- seconds without automatic searches after the server failed one
 Finder.searchFailures = 0
 local SEARCH_WATCHDOG = 10 -- a search without an answer after this long counts as failed
@@ -543,7 +611,7 @@ Finder.searchFromClick = true -- what started the search in flight
 Finder.silentFails = 0
 Finder.autoSearches = 0
 local searchToken = 0
-local refreshQueued = false
+
 
 -- The game refused a search that was not from a click: from now on only clicks search.
 function Finder.SearchRefused(why)
@@ -614,27 +682,16 @@ function Finder.Search(auto)
 	return true, ("Searching the Group Finder for %s..."):format(s.activityName or "your dungeon")
 end
 
--- Refreshes the list unless a search is running or the last one is too recent; a refresh that is
--- too early waits for the gap. `fromClick` as for InviteRound.
+-- Refreshes the list after a click (+, an invite round from a click). Without a click it does
+-- nothing: the game would refuse the search. Also nothing while a search runs or right after one.
 function Finder.Refresh(fromClick)
-	if not ns.settings.activityID or Finder.searching then
+	if not fromClick or not ns.settings.activityID or Finder.searching then
 		return false
 	end
-	if not fromClick and (Finder.searchNeedsClick or GetTime() < (Finder.pauseUntil or 0)) then
+	if GetTime() - (Finder.lastSearchAt or -1000) < Finder.MIN_SEARCH_GAP then
 		return false
 	end
-	local since = GetTime() - (Finder.lastSearchAt or -1000)
-	if since < Finder.MIN_SEARCH_GAP then
-		if not refreshQueued then
-			refreshQueued = true
-			C_Timer.After(Finder.MIN_SEARCH_GAP - since, ns.Guard("queued refresh", function()
-				refreshQueued = false
-				Finder.Refresh(false)
-			end))
-		end
-		return false
-	end
-	return Finder.Search(not fromClick)
+	return Finder.Search()
 end
 
 local rescanQueued = false

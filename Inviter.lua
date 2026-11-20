@@ -300,7 +300,7 @@ function Inviter.InviteCandidate(c, role, source)
 	return true, ("Invited %s as %s."):format(c.name, ns.ROLE_LABEL[role])
 end
 
--- "Rules for Deadmines: Tank 1 (17+, Warrior/Druid/Paladin), Healer 1 (17+, any class), ...;
+-- "Rules for Deadmines: Tank 1 (17+, Warrior/Druid/Paladin), Healer 1 (17-25, any class), ...;
 -- distinct classes off; you are DPS"
 function Inviter.RulesText()
 	local s = ns.settings
@@ -315,7 +315,9 @@ function Inviter.RulesText()
 			end
 		end
 		local classText = count == #ns.CLASSES and "any class" or (count == 0 and "no class" or table.concat(classes, "/"))
-		parts[#parts + 1] = ("%s %d (%d+, %s)"):format(ns.ROLE_LABEL[role], rule.need, rule.minLevel, classText)
+		local levels = (rule.maxLevel or ns.MAX_LEVEL) < ns.MAX_LEVEL and ("%d-%d"):format(rule.minLevel, rule.maxLevel)
+			or ("%d+"):format(rule.minLevel)
+		parts[#parts + 1] = ("%s %d (%s, %s)"):format(ns.ROLE_LABEL[role], rule.need, levels, classText)
 	end
 	return ("Rules for %s: %s; distinct classes %s; you are %s"):format(s.activityName or "?",
 		table.concat(parts, ", "), s.distinctClasses and "on" or "off", ns.ROLE_LABEL[s.myRole] or "?")
@@ -403,6 +405,10 @@ function Inviter.InviteRound(fromClick)
 		or nil
 	if missingText and missingText ~= Inviter.lastMissingLogged then
 		addLog(missingText)
+		if Inviter.auto and not fromClick then
+			ns.Print(("Nobody left to invite as %s. Press |cffffd100Search|r (or its key binding) for a fresh list; auto mode goes on from there."):format(
+				table.concat(missing, " or ")))
+		end
 	end
 	Inviter.lastMissingLogged = missingText
 
@@ -433,21 +439,6 @@ function Inviter.Continue()
 	end
 	local _, message = Inviter.InviteRound(false)
 	ns.SetStatus(message)
-end
-
--- True when a seat is still open (an invite waiting takes its seat): the next invite will want
--- a fresh list, so it keeps refreshing even while an answer is awaited.
-function Inviter.HasOpenRole()
-	local state = ns.Finder.GroupState()
-	if state.full then
-		return false
-	end
-	for _, role in ipairs(ns.ROLES) do
-		if state.remaining[role] > 0 then
-			return true
-		end
-	end
-	return false
 end
 
 -- Open roles nobody in the list fits right now (an invite waiting fills its role's seat).
@@ -500,53 +491,12 @@ function Inviter.UpdateHunting()
 	end
 	local text = #missing > 0 and rolesText(missing) or nil
 	if text and text ~= Inviter.huntingText then
-		addLog(("Nobody listed for %s: searching every %d s until someone is"):format(text, ns.Finder.HUNT_REFRESH))
+		addLog(("Nobody listed for %s: a fresh search (Search or its key binding) may find someone"):format(text))
 	end
 	Inviter.huntingText = text
 	Inviter.hunting = now
 	return missing
 end
-
--- Watching the list: in auto mode, or while the EasyLFG window is open. While an open role has
--- nobody to invite, the list is searched again every HUNT_REFRESH seconds until someone shows up;
--- in auto mode it is also kept fresh every AUTO_REFRESH seconds otherwise.
-function Inviter.Watching()
-	return Inviter.auto or (ns.UI and ns.UI.IsShown and ns.UI.IsShown()) or false
-end
-
-function Inviter.RefreshTick()
-	if not ns.settings.activityID or not Inviter.CanInvite() then
-		return
-	end
-	local missing = Inviter.UpdateHunting()
-	if #missing > 0 then
-		ns.Finder.Refresh(false)
-	elseif Inviter.auto and Inviter.HasOpenRole()
-		and GetTime() - (ns.Finder.lastSearchAt or -1000) >= ns.Finder.AUTO_REFRESH then
-		ns.Finder.Refresh(false)
-	end
-end
-
-local tickerRunning = false
-
--- Starts the refresh ticker if it is not running; it stops by itself once nothing is watched.
-local function startRefreshTicker()
-	if tickerRunning then
-		return
-	end
-	tickerRunning = true
-	local function tick()
-		if not Inviter.Watching() then
-			tickerRunning = false
-			return
-		end
-		Inviter.RefreshTick()
-		C_Timer.After(ns.Finder.HUNT_REFRESH, ns.Guard("refresh ticker", tick))
-	end
-	C_Timer.After(ns.Finder.HUNT_REFRESH, ns.Guard("refresh ticker", tick))
-end
-
-Inviter.StartRefreshTicker = startRefreshTicker
 
 -- Turns auto mode on. Called from a click, so it may search first.
 function Inviter.Start()
@@ -563,7 +513,6 @@ function Inviter.Start()
 	Inviter.auto = true
 	Inviter.announcedComplete = false
 	addLog("Auto invite ON")
-	startRefreshTicker()
 	if not ns.Finder.lastResultsAt or GetTime() - ns.Finder.lastResultsAt > 30 then
 		local ok, message = ns.Finder.Search()
 		if ok then
@@ -584,7 +533,6 @@ function Inviter.Stop()
 	Inviter.auto = false
 	Inviter.autoStoppedAt = nil -- stopped by you: a role check does not turn it back on
 	Inviter.inviteAfterSearch = false
-	-- The ticker stops by itself unless the window is open (then it keeps looking for missing roles).
 	if Inviter.PendingCount() > 0 then
 		return true, ("Auto invite off. Still waiting for %s."):format(Inviter.PendingText())
 	end
@@ -779,7 +727,6 @@ function Inviter.AfterRoleChange()
 		if not Inviter.auto and stoppedAt and GetTime() - stoppedAt <= RESUME_WINDOW then
 			Inviter.autoStoppedAt = nil
 			Inviter.auto = true
-			Inviter.StartRefreshTicker()
 			ns.Print("A seat opened again after a role change: auto invite is back on.")
 			addLog("Auto invite ON again (a role change reopened a seat)")
 		end

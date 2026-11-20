@@ -67,9 +67,9 @@ local DEFAULT_SETTINGS = {
 	categoryID = nil,
 	myRole = "DAMAGER",
 	roles = {
-		TANK = { need = 1, minLevel = 1, classes = classSet({ "WARRIOR", "DRUID", "PALADIN" }) },
-		HEALER = { need = 1, minLevel = 1, classes = classSet({ "PRIEST", "DRUID", "PALADIN", "SHAMAN" }) },
-		DAMAGER = { need = 3, minLevel = 1, classes = classSet(ns.CLASSES) },
+		TANK = { need = 1, minLevel = 1, maxLevel = 60, classes = classSet({ "WARRIOR", "DRUID", "PALADIN" }) },
+		HEALER = { need = 1, minLevel = 1, maxLevel = 60, classes = classSet({ "PRIEST", "DRUID", "PALADIN", "SHAMAN" }) },
+		DAMAGER = { need = 3, minLevel = 1, maxLevel = 60, classes = classSet(ns.CLASSES) },
 	},
 	distinctClasses = false,
 	whisper = true,
@@ -84,6 +84,35 @@ function ns.IsSecret(value)
 end
 
 -- The value, or nil when the client hides it from addons.
+-- PlayerNotes (optional) ---------------------------------------------------------------------
+-- When the PlayerNotes addon is installed, EasyLFG asks it what your notes say about a player:
+-- { verdict = "negative" | "mixed" | "positive" | "neutral", label, categories, note }, or nil.
+-- Without PlayerNotes, or if it answers something unexpected, this is simply nil.
+
+function ns.HasPlayerNotes()
+	return type(PlayerNotesAPI) == "table" and type(PlayerNotesAPI.Lookup) == "function"
+end
+
+function ns.Notes(name)
+	if type(name) ~= "string" or not ns.HasPlayerNotes() then
+		return nil
+	end
+	local ok, found = pcall(PlayerNotesAPI.Lookup, name)
+	if ok and type(found) == "table" and type(found.verdict) == "string" then
+		return found
+	end
+	return nil
+end
+
+-- "Caution (Griefer, Ninja)"
+function ns.NotesText(notes)
+	local text = notes.label or "note"
+	if type(notes.categories) == "table" and #notes.categories > 0 then
+		text = ("%s (%s)"):format(text, table.concat(notes.categories, ", "))
+	end
+	return text
+end
+
 function ns.Readable(value)
 	if value == nil or ns.IsSecret(value) then
 		return nil
@@ -453,7 +482,12 @@ function ns.InitDB()
 	if (db.version or 1) < 3 then
 		settings.delay = nil
 	end
-	db.version = 3
+	-- Version 4: the max level follows the dungeon's level range. Saved settings get it once, as
+	-- soon as the dungeon's range can be read (Finder.UpgradeMaxLevel).
+	if (db.version or 1) < 4 then
+		db.maxLevelFromDungeon = true
+	end
+	db.version = 4
 	fillDefaults(settings, DEFAULT_SETTINGS)
 	settings.timeout = ns.Clamp(settings.timeout, ns.MIN_TIMEOUT, ns.MAX_TIMEOUT)
 	-- A group that needs nobody is a leftover of emptied number boxes (fixed in 1.1.0), not a choice.
@@ -467,6 +501,10 @@ function ns.InitDB()
 		end
 		settings.roles[role].need = ns.Clamp(settings.roles[role].need, 0, ns.MAX_PARTY)
 		settings.roles[role].minLevel = ns.Clamp(settings.roles[role].minLevel, 1, ns.MAX_LEVEL)
+		settings.roles[role].maxLevel = ns.Clamp(settings.roles[role].maxLevel or ns.MAX_LEVEL, 1, ns.MAX_LEVEL)
+		if settings.roles[role].maxLevel < settings.roles[role].minLevel then
+			settings.roles[role].maxLevel = ns.MAX_LEVEL
+		end
 		total = total + settings.roles[role].need
 	end
 	if total == 0 then

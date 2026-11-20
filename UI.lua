@@ -327,7 +327,7 @@ local function buildSettings()
 	widgets.myRole:SetScript("OnClick", openMyRoleMenu)
 
 	y = -82
-	local headers = { { "Role", 16 }, { "Needed", 104 }, { "Min level", 168 }, { "Classes", 250 } }
+	local headers = { { "Role", 16 }, { "Needed", 104 }, { "Min lvl", 156 }, { "Max lvl", 198 }, { "Classes", 250 } }
 	for _, header in ipairs(headers) do
 		local label = newLabel(frame, header[1], "GameFontNormalSmall")
 		label:SetPoint("TOPLEFT", frame, "TOPLEFT", header[2], y)
@@ -344,12 +344,27 @@ local function buildSettings()
 			ns.settings.roles[role].need = value
 		end)
 		row.need:SetPoint("TOPLEFT", frame, "TOPLEFT", 112, rowY)
+		-- Min and max stay in order: the one you typed wins, the other follows.
 		row.level = newNumberBox(frame, 30, 1, ns.MAX_LEVEL, function()
 			return ns.settings.roles[role].minLevel
 		end, function(value)
-			ns.settings.roles[role].minLevel = value
+			local rule = ns.settings.roles[role]
+			rule.minLevel = value
+			if (rule.maxLevel or ns.MAX_LEVEL) < value then
+				rule.maxLevel = value
+			end
 		end)
-		row.level:SetPoint("TOPLEFT", frame, "TOPLEFT", 180, rowY)
+		row.level:SetPoint("TOPLEFT", frame, "TOPLEFT", 162, rowY)
+		row.maxLevel = newNumberBox(frame, 30, 1, ns.MAX_LEVEL, function()
+			return ns.settings.roles[role].maxLevel or ns.MAX_LEVEL
+		end, function(value)
+			local rule = ns.settings.roles[role]
+			rule.maxLevel = value
+			if rule.minLevel > value then
+				rule.minLevel = value
+			end
+		end)
+		row.maxLevel:SetPoint("TOPLEFT", frame, "TOPLEFT", 204, rowY)
 		row.classes = newButton(frame, "", 300)
 		row.classes:SetPoint("TOPLEFT", frame, "TOPLEFT", 250, rowY)
 		row.classes:SetScript("OnClick", function(self)
@@ -524,6 +539,12 @@ local function createRow(content, index)
 			GameTooltip:AddLine(c.comment, 0.9, 0.9, 0.6, true)
 		end
 		GameTooltip:AddLine(c.reason or "", 0.6, 0.8, 1, true)
+		if c.notes then
+			GameTooltip:AddLine("PlayerNotes: " .. ns.NotesText(c.notes), 1, 0.82, 0.25, true)
+			if c.notes.note then
+				GameTooltip:AddLine(c.notes.note, 1, 0.91, 0.66, true)
+			end
+		end
 		GameTooltip:AddLine("+ invites. Click the row for more options.", 0.5, 0.5, 0.5)
 		GameTooltip:Show()
 	end)
@@ -709,11 +730,10 @@ local function build(kind)
 	-- Opening the window reads the group and its roles afresh, then the list. Each step is
 	-- guarded on its own, so one surprise from the client cannot leave the rest blank.
 	frame:SetScript("OnShow", function()
+		ns.Guard("show: max level", ns.Finder.UpgradeMaxLevel)()
 		ns.Guard("show: group", ns.Finder.Evaluate)()
 		ns.Guard("show: list", ns.Finder.Scan)()
 		ns.Guard("show: refresh", UI.Refresh)()
-		-- While the window is open, missing roles are searched for until someone is listed.
-		ns.Inviter.StartRefreshTicker()
 	end)
 
 	tinsert(UISpecialFrames, FRAME_NAME[kind])
@@ -923,6 +943,9 @@ function UI.Refresh()
 		end
 		if not row.level:HasFocus() then
 			row.level:load()
+		end
+		if not row.maxLevel:HasFocus() then
+			row.maxLevel:load()
 		end
 		row.classes:SetText(classSummary(s.roles[role], role))
 	end

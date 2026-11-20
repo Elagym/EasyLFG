@@ -28,7 +28,7 @@ local Finder, Inviter = ns.Finder, ns.Inviter
 
 -- 1. Loading and upgrade -----------------------------------------------------------------------
 M.Fire("ADDON_LOADED", "EasyLFG")
-report("db version 3", EasyLFGDB.version == 3)
+report("db version 4", EasyLFGDB.version == 4)
 report("delay setting gone", ns.settings.delay == nil)
 report("old default message upgraded", ns.settings.message == "Hi, do you wanna join for <dungeon> as <role> ?", ns.settings.message)
 report("ask-again setting removed", ns.settings.forgetMinutes == nil)
@@ -56,6 +56,9 @@ for _, a in ipairs(groups[1].activities) do if a.id == 801 then deadmines = a en
 Finder.SetActivity(deadmines)
 report("activity saved", ns.settings.activityID == 801 and ns.settings.activityName == "Deadmines" and ns.settings.categoryID == 2)
 report("min level follows dungeon", ns.settings.roles.TANK.minLevel == 17)
+report("max level is the top of the dungeon's range + 2", ns.settings.roles.TANK.maxLevel == 28 and ns.settings.roles.DAMAGER.maxLevel == 28, ns.settings.roles.TANK.maxLevel)
+-- The scenarios below use players up to level 40: no max for them.
+for _, role in ipairs(ns.ROLES) do ns.settings.roles[role].maxLevel = 60 end
 ok, msg = Finder.Search()
 local s = M.searches[1]
 report("search only for the chosen dungeon", ok and s[1] == 2 and #s[7] == 1 and s[7][1] == 801, msg)
@@ -396,10 +399,9 @@ LFGBrowseFrame.SendMessageButton = M.NewFrame("Button")
 M.Fire("ADDON_LOADED", "Blizzard_GroupFinder_VanillaStyle")
 report("group finder button", findFrame(function(f) return f.kind == "Button" and f.text == "EasyLFG" end) ~= nil)
 
--- 21. The list refreshes after invites, and keeps searching while a role has nobody listed ----------
+-- 21. Searches only from a click: never on a timer, never by opening the window -------------------
 EasyLFGFrame:Hide()
 Inviter.Stop()
--- Start from automatic searches allowed, whatever earlier scenarios left.
 Finder.searchNeedsClick = false
 Finder.silentFails = 0
 Finder.autoSearches = 0
@@ -420,81 +422,56 @@ report("refresh is for the chosen dungeon only", M.searches[#M.searches][7][1] =
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 M.Fire("CHAT_MSG_SYSTEM", "Fresh Tank declines your group invitation.")
 
--- Auto mode: every role is open with nobody listed, so it searches every 2 s until someone is.
-ok = Inviter.Start()
+-- Opening the window with roles nobody fits: no search at all (the game would refuse it).
+M.ClearListings()
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 searches = #M.searches
-M.Advance(2)
-report("nobody listed: searched again after 2 s", #M.searches == searches + 1 and Finder.searchFromClick == false and Finder.autoSearches == 1, #M.searches - searches)
-M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-M.Advance(2)
-report("still nobody: and again 2 s later", #M.searches == searches + 2, #M.searches - searches)
-M.AddListing({ name = "Fresh Priest", class = "PRIEST", level = 30, healer = true })
-M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-report("auto results invite the healer", Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Fresh Priest")
-report("automatic searches work: no failures counted", Finder.silentFails == 0 and not Finder.searchNeedsClick)
-report("refresh after the invite waits for the 2 s gap", #M.searches == searches + 2)
-M.Advance(2)
-report("gap passed: refreshed", #M.searches == searches + 3, #M.searches - searches)
+EasyLFGFrame:Show()
+M.Advance(60)
+report("opening the window searches nothing", #M.searches == searches, #M.searches - searches)
+EasyLFGFrame:Hide()
 
--- The game silently ignores automatic searches: after two without an answer, a click is needed.
-M.Advance(11) -- the search above gets no answer
-report("one unanswered search counted", Finder.silentFails == 1 and not Finder.searchNeedsClick, Finder.silentFails)
-M.Advance(10) -- the ticker searches again, and that one is not answered either
-M.Advance(11)
-report("two unanswered: falls back to clicks", Finder.searchNeedsClick == true)
-report("you are told to press Search", M.PrintsContain("only allows a Group Finder search from a click"))
+-- Auto mode: invites from the list it has; no search on a timer, even with nobody to invite.
+M.Advance(10)
 searches = #M.searches
-M.Advance(30)
-report("no more automatic searches", #M.searches == searches)
-report("auto invites keep running", Inviter.auto == true)
-ok = Finder.Search()
-report("a click still searches", ok and #M.searches == searches + 1)
+ok, msg = Inviter.Start() -- a click: may search once for a fresh list
+report("start auto searches once, from the click", #M.searches == searches + 1, #M.searches - searches)
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-
--- A blocked automatic search is noticed at once.
-Finder.searchNeedsClick = false
-Finder.silentFails = 0
-M.Fire("ADDON_ACTION_BLOCKED", "EasyLFG", "C_LFGList.Search()")
-report("blocked search: falls back to clicks", Finder.searchNeedsClick == true and Inviter.auto == true)
-
--- Stopping auto mode with the window closed stops the refreshes.
-Finder.searchNeedsClick = false
-Inviter.Stop()
 searches = #M.searches
 M.Advance(60)
-report("no refresh after stop", #M.searches == searches)
+report("auto mode never searches on a timer", #M.searches == searches and Finder.autoSearches == 0, #M.searches - searches)
+report("auto mode says to press Search when nobody is left", M.PrintsContain("Nobody left to invite as"))
+-- A search you make (button, key binding, Blizzard's window) brings new players: auto invites them.
+M.AddListing({ name = "Fresh Priest", class = "PRIEST", level = 30, healer = true })
+ok = Finder.Search()
+report("a click searches", ok and #M.searches == searches + 1)
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+report("auto invites from your search", Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Fresh Priest")
+searches = #M.searches
+M.Advance(60)
+report("the invite answer brings no search either", #M.searches == searches, #M.searches - searches)
+-- A second click right after a search finds the list fresh.
+M.Fire("CHAT_MSG_SYSTEM", "Fresh Priest declines your group invitation.")
+Finder.lastSearchAt = GetTime()
+report("no second search within 2 s", Finder.Refresh(true) == false and #M.searches == searches)
+M.Advance(3)
+report("a click after 2 s searches", Finder.Refresh(true) and #M.searches == searches + 1)
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+report("no automatic refresh without a click", Finder.Refresh(false) == false)
+Inviter.Stop()
 
--- Auto mode off, window open: missing roles are searched for too, and a new match is announced.
+-- Auto mode off, window open: a match from your own search is announced with a sound.
 wipe(Inviter.pending)
 M.ClearListings()
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-Finder.silentFails = 0
 EasyLFGFrame:Show()
-searches = #M.searches
-M.Advance(5)
-report("window open: nobody listed, searched after 5 s", #M.searches == searches + 1 and Inviter.auto == false, #M.searches - searches)
 M.AddListing({ name = "Found Tank", class = "WARRIOR", level = 30, tank = true })
 local soundBefore = M.sound or 0
 M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
 report("new match announced with a sound", M.PrintsContain("Tank found:") and (M.sound or 0) == soundBefore + 1)
 report("nothing invited with auto off", Inviter.PendingCount() == 0)
--- The server fails a search (too many searches): a short pause, not a refusal.
-M.ClearListings()
-M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
-M.Advance(5)
-M.Fire("LFG_LIST_SEARCH_FAILED", "throttled")
-report("server failure is not a refusal", not Finder.searchNeedsClick and Finder.searchFailures == 1)
-searches = #M.searches
-M.Advance(10)
-report("automatic searches pause after a server failure", #M.searches == searches)
-M.Advance(10)
-report("then they go on", #M.searches > searches)
 EasyLFGFrame:Hide()
-M.Advance(10)
-searches = #M.searches
-M.Advance(30)
-report("window closed: no more searching", #M.searches == searches)
-report("no errors after refresh tests", ns.lastError == nil, ns.lastError)
+report("no errors after search tests", ns.lastError == nil, ns.lastError)
 
 -- 22. Role checks: none while the group fills, one once it is full; the invited role always counts --
 Inviter.Stop()
@@ -702,11 +679,9 @@ report("log: no answer", logHas("Rogue Two (DPS): no answer after 90 s"))
 report("log: busy", logHas("Norole Mage (DPS): already in a group"))
 report("log: nobody matches", logHas("No match for Tank"))
 report("log: click refresh", logHas("List refreshed (your click)"))
-report("log: automatic refresh", logHas("List refreshed (automatic)"))
 report("log: refresh by Blizzard's window", logHas("List refreshed (Blizzard's window or another addon)"))
 report("log: search without answer", logHas("got no answer within 10 s"))
-report("log: automatic searches refused", logHas("Automatic searches refused"))
-report("log: blocked", logHas("The game blocked C_LFGList.Search()"))
+report("log: blocked", logHas("The game blocked UnitSetRoleEnum()"))
 report("log: invite failure", logHas("Invite to Fail Guy as Tank FAILED"))
 report("log: auto on/off", logHas("Auto invite ON") and logHas("Auto invite OFF (stopped)") and logHas("Auto invite OFF (group complete)"))
 report("log: group complete with members", logHas("Group complete (5 players): you DPS") and logHas("Tank Big Bear"))
@@ -1005,6 +980,148 @@ report("no demo while a real invite waits", not ok and msg:find("Real Heal") and
 wipe(Inviter.pending)
 EasyLFGFrame:Hide()
 report("no errors after demo tests", ns.lastError == nil, ns.lastError)
+
+-- 28. Max level per role -----------------------------------------------------------------------------
+Inviter.Stop()
+wipe(Inviter.pending)
+wipe(Inviter.joining)
+wipe(ns.asked)
+wipe(EasyLFGDB.memberRoles)
+M.party = {}
+M.Fire("GROUP_ROSTER_UPDATE")
+-- Saved settings from before have no max: no limit.
+EasyLFGDB.settings.roles.DAMAGER.maxLevel = nil
+ns.InitDB()
+report("no saved max means no limit", ns.settings.roles.DAMAGER.maxLevel == 60)
+ns.settings.roles.DAMAGER.minLevel, ns.settings.roles.DAMAGER.maxLevel = 17, 25
+ns.settings.roles.DAMAGER.need = 3
+for _, class in ipairs(ns.CLASSES) do ns.settings.roles.DAMAGER.classes[class] = true end
+M.ClearListings()
+M.AddListing({ name = "Too Old", class = "ROGUE", level = 30, dps = true })
+M.AddListing({ name = "Just Right", class = "MAGE", level = 25, dps = true })
+M.AddListing({ name = "Too Young", class = "HUNTER", level = 16, dps = true })
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+report("above the max refused with its reason", find("Too Old").status == "nofit" and find("Too Old").reason == "level 30, DPS max 25", find("Too Old").reason)
+report("at the max accepted", find("Just Right").status == "match")
+report("below the min still refused", find("Too Young").reason == "level 16, DPS needs 17", find("Too Young").reason)
+report("rules show the level range", Inviter.RulesText():find("DPS 3 (17-25,", 1, true) ~= nil, Inviter.RulesText())
+ns.settings.roles.DAMAGER.maxLevel = 60
+report("a dungeon near level 60 caps the max at 60", Finder.DefaultMaxLevel(59) == 60 and Finder.DefaultMaxLevel(26) == 28)
+report("no max shown as 17+", Inviter.RulesText():find("DPS 3 (17+,", 1, true) ~= nil, Inviter.RulesText())
+
+-- The window: a Max box per role; min and max stay in order.
+ns.settings.roles.TANK.minLevel, ns.settings.roles.TANK.maxLevel = 21, 33
+EasyLFGFrame:Show()
+ns.UI.Refresh()
+report("max level header", findFrame(function(f) return f.text == "Max lvl" end) ~= nil)
+local maxBox = findFrame(function(f) return f.kind == "EditBox" and rawget(f, "load") and f.text == "33" end)
+report("tank max box shows 33", maxBox ~= nil)
+maxBox.text = "18"
+maxBox:ClearFocus()
+report("a max below the min pulls the min down", ns.settings.roles.TANK.maxLevel == 18 and ns.settings.roles.TANK.minLevel == 18,
+	ns.settings.roles.TANK.minLevel .. "-" .. ns.settings.roles.TANK.maxLevel)
+local minBox = findFrame(function(f) return f.kind == "EditBox" and rawget(f, "load") and f.text == "18" and f ~= maxBox end)
+minBox.text = "40"
+minBox:ClearFocus()
+report("a min above the max pushes the max up", ns.settings.roles.TANK.minLevel == 40 and ns.settings.roles.TANK.maxLevel == 40,
+	ns.settings.roles.TANK.minLevel .. "-" .. ns.settings.roles.TANK.maxLevel)
+-- Picking a dungeon sets the max to the top of its level range, or no limit without one.
+ns.settings.roles.TANK.minLevel, ns.settings.roles.TANK.maxLevel = 10, 15
+local dungeon = { id = ns.settings.activityID, name = ns.settings.activityName, categoryID = ns.settings.categoryID, minLevel = 17, maxLevel = 26 }
+Finder.SetActivity(dungeon)
+report("dungeon sets min and max (top + 2)", ns.settings.roles.TANK.minLevel == 17 and ns.settings.roles.TANK.maxLevel == 28 and ns.settings.roles.HEALER.maxLevel == 28,
+	ns.settings.roles.TANK.minLevel .. "-" .. ns.settings.roles.TANK.maxLevel)
+dungeon.maxLevel = 0
+Finder.SetActivity(dungeon)
+report("dungeon without a top: no max", ns.settings.roles.TANK.maxLevel == 60)
+-- Saved settings from before: each role still at no limit gets the dungeon's top, once.
+ns.settings.activityID = 801
+for _, role in ipairs(ns.ROLES) do ns.settings.roles[role].minLevel, ns.settings.roles[role].maxLevel = 17, 60 end
+ns.settings.roles.HEALER.maxLevel = 30 -- chosen by you: kept
+EasyLFGDB.version = 3
+EasyLFGDB.maxLevelFromDungeon = nil
+ns.InitDB()
+report("upgrade marked", EasyLFGDB.version == 4 and EasyLFGDB.maxLevelFromDungeon == true)
+Finder.UpgradeMaxLevel()
+report("upgrade sets the dungeon's top + 2", ns.settings.roles.TANK.maxLevel == 28 and ns.settings.roles.DAMAGER.maxLevel == 28, ns.settings.roles.TANK.maxLevel)
+report("a max you chose is kept", ns.settings.roles.HEALER.maxLevel == 30)
+report("upgrade done once", EasyLFGDB.maxLevelFromDungeon == nil and logHas("Max level set to 28: the top of"))
+ns.settings.roles.TANK.maxLevel = 60
+Finder.UpgradeMaxLevel()
+report("not applied twice", ns.settings.roles.TANK.maxLevel == 60)
+for _, role in ipairs(ns.ROLES) do ns.settings.roles[role].maxLevel = 60 end
+EasyLFGFrame:Hide()
+report("no errors after max level tests", ns.lastError == nil, ns.lastError)
+
+-- 29. PlayerNotes: Caution never invited, Mixed and Good shown --------------------------------------
+Inviter.Stop()
+wipe(Inviter.pending)
+wipe(Inviter.joining)
+wipe(ns.asked)
+wipe(EasyLFGDB.memberRoles)
+M.party = {}
+M.Fire("GROUP_ROSTER_UPDATE")
+ns.settings.myRole = "TANK"
+ns.settings.distinctClasses = false
+for _, role in ipairs(ns.ROLES) do
+	ns.settings.roles[role].minLevel, ns.settings.roles[role].maxLevel = 17, 60
+	for _, class in ipairs(ns.ROLE_CLASSES[role]) do ns.settings.roles[role].classes[class] = true end
+end
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need, ns.settings.roles.DAMAGER.need = 1, 1, 3
+M.ClearListings()
+M.AddListing({ name = "Bad Healer", class = "PRIEST", level = 40, healer = true })
+M.AddListing({ name = "Okay Healer", class = "SHAMAN", level = 30, healer = true })
+M.AddListing({ name = "Mixed Rogue", class = "ROGUE", level = 30, dps = true })
+M.AddListing({ name = "Good Mage", class = "MAGE", level = 30, dps = true })
+
+-- Without PlayerNotes nothing changes.
+PlayerNotesAPI = nil
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+report("no PlayerNotes: the best healer fits", find("Bad Healer").status == "match" and not find("Bad Healer").reason:find("PlayerNotes"))
+
+local notes = {
+	["bad-healer"] = { verdict = "negative", label = "Caution", categories = { "Griefer", "Ninja" }, note = "rolled need on everything" },
+	["mixed-rogue"] = { verdict = "mixed", label = "Mixed", categories = { "Social", "Quitter" } },
+	["good-mage"] = { verdict = "positive", label = "Good", categories = { "Skilled" } },
+	["plain-guy"] = { verdict = "neutral", categories = {} },
+}
+local lookups = 0
+PlayerNotesAPI = { version = 1, Lookup = function(name) lookups = lookups + 1; return notes[ns.MakeKey(name)] end }
+Finder.Evaluate()
+report("caution refused with the reason", find("Bad Healer").status == "nofit" and find("Bad Healer").reason == "PlayerNotes: Caution (Griefer, Ninja)", find("Bad Healer").reason)
+report("caution logged once", logHas("Bad Healer is marked Caution (Griefer, Ninja) in PlayerNotes: not invited"))
+report("mixed still fits, tagged", find("Mixed Rogue").status == "match" and find("Mixed Rogue").reason:find("PlayerNotes: Mixed", 1, true) ~= nil, find("Mixed Rogue").reason)
+report("good fits, tagged", find("Good Mage").status == "match" and find("Good Mage").reason:find("PlayerNotes: Good", 1, true) ~= nil)
+report("no note, no tag", not find("Okay Healer").reason:find("PlayerNotes", 1, true))
+local before = #M.invites
+ok, msg = Inviter.InviteRound(true)
+report("the next healer is invited, not the caution one", ok and Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Okay Healer" and #M.invites == before + 1, msg)
+EasyLFGFrame:Show()
+ns.UI.Refresh()
+local badRow = findFrame(function(f) return rawget(f, "candidate") and f.candidate.name == "Bad Healer" and f.shown end)
+report("caution row: + off with the reason", badRow and badRow.invite.enabled == false and badRow.invite.why:find("PlayerNotes: Caution", 1, true), badRow and badRow.invite.why)
+badRow.scripts.OnEnter(badRow)
+report("row tooltip without errors", ns.lastError == nil, ns.lastError)
+-- Invite anyway still works for them.
+Inviter.Stop()
+wipe(Inviter.pending)
+ok = Inviter.InviteCandidate(find("Bad Healer"), "HEALER", "by hand")
+report("invite anyway still possible", ok and Inviter.pending.HEALER and Inviter.pending.HEALER.name == "Bad Healer")
+wipe(Inviter.pending)
+-- PlayerNotes answering something odd, or failing, is the same as no note.
+PlayerNotesAPI = { version = 1, Lookup = function() error("broken") end }
+Finder.Evaluate()
+report("a failing lookup changes nothing", find("Bad Healer").status == "match" and ns.lastError == nil, ns.lastError)
+PlayerNotesAPI = { version = 1, Lookup = function() return "nonsense" end }
+Finder.Evaluate()
+report("an odd answer changes nothing", find("Bad Healer").status == "match")
+PlayerNotesAPI = { version = 1, Lookup = function(name) return notes[ns.MakeKey(name)] end }
+Finder.Evaluate()
+SlashCmdList.EASYLFG("debug")
+report("debug shows PlayerNotes", M.PrintsContain("PlayerNotes:") and M.PrintsContain("1 Caution, 1 Mixed, 1 Good"))
+PlayerNotesAPI = nil
+EasyLFGFrame:Hide()
+report("no errors after PlayerNotes tests", ns.lastError == nil, ns.lastError)
 
 out(("%d passed, %d failed"):format(passed, failed))
 if failed > 0 then
