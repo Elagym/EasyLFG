@@ -1123,6 +1123,88 @@ PlayerNotesAPI = nil
 EasyLFGFrame:Hide()
 report("no errors after PlayerNotes tests", ns.lastError == nil, ns.lastError)
 
+-- 30. At least 1 Warlock (DPS) ----------------------------------------------------------------------
+Inviter.Stop()
+wipe(Inviter.pending)
+wipe(Inviter.joining)
+wipe(ns.asked)
+wipe(EasyLFGDB.memberRoles)
+M.party = {}
+M.Fire("GROUP_ROSTER_UPDATE")
+M.myClass = "MAGE"
+ns.settings.myRole = "TANK"
+ns.settings.distinctClasses = false
+for _, role in ipairs(ns.ROLES) do
+	ns.settings.roles[role].minLevel, ns.settings.roles[role].maxLevel = 17, 60
+	for _, class in ipairs(ns.ROLE_CLASSES[role]) do ns.settings.roles[role].classes[class] = true end
+end
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need, ns.settings.roles.DAMAGER.need = 1, 1, 3
+ns.settings.roles.DAMAGER.classes.WARLOCK = false -- unticked before: the checkbox ticks it again
+M.ClearListings()
+M.AddListing({ name = "Big Rogue", class = "ROGUE", level = 40, dps = true })
+M.AddListing({ name = "Big Hunter", class = "HUNTER", level = 39, dps = true })
+M.AddListing({ name = "Small Lock", class = "WARLOCK", level = 20, dps = true })
+M.Fire("LFG_LIST_SEARCH_RESULTS_RECEIVED")
+
+EasyLFGFrame:Show()
+ns.UI.Refresh()
+local lockBox = findFrame(function(f) return f.kind == "CheckButton" and f.label and f.label.text == "At least 1 Warlock (DPS)" end)
+report("warlock checkbox", lockBox ~= nil)
+lockBox.checked = true
+lockBox.scripts.OnClick(lockBox)
+report("checkbox saves and allows warlocks as DPS", ns.settings.needWarlock == true and ns.settings.roles.DAMAGER.classes.WARLOCK == true)
+report("logged", logHas("At least 1 Warlock: on"))
+report("rules mention it", Inviter.RulesText():find("at least 1 Warlock", 1, true) ~= nil)
+ns.UI.Refresh()
+report("group line says a Warlock is needed", findFrame(function(f) return type(f.text) == "string" and f.text:find("Warlock: needed", 1, true) end) ~= nil)
+report("panel keeps a seat for the Warlock", findFrame(function(f) return type(f.text) == "string" and f.text:find("Warlock wanted", 1, true) end) ~= nil)
+
+-- With a Warlock listed, they go first among the DPS, even at a lower level.
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need = 0, 0
+ok, msg = Inviter.InviteRound(true)
+report("warlock invited first among dps", ok and Inviter.pending.DAMAGER and Inviter.pending.DAMAGER.name == "Small Lock", msg)
+report("a pending warlock counts", Finder.Evaluate().hasWarlock and find("Big Rogue").status == "match")
+M.Fire("CHAT_MSG_SYSTEM", "Small Lock declines your group invitation.")
+
+-- No Warlock listed and one DPS seat left: that seat waits for a Warlock.
+ns.settings.roles.DAMAGER.need = 1
+Finder.Evaluate()
+report("last dps seat kept for a warlock", find("Big Rogue").status == "nofit" and find("Big Rogue").reason == "last DPS seat kept for a Warlock", find("Big Rogue").reason)
+local before = #M.invites
+Inviter.InviteRound(true)
+report("no non-warlock invited for it", #M.invites == before)
+-- With more DPS seats open, others can fill the rest.
+ns.settings.roles.DAMAGER.need = 3
+Finder.Evaluate()
+report("other dps seats stay open to everyone", find("Big Rogue").status == "match")
+
+-- A friend already in the group who is a Warlock counts: no seat kept.
+M.Join("Friend", "Lock", "WARLOCK", "DAMAGER")
+M.Fire("GROUP_ROSTER_UPDATE")
+local state = Finder.Evaluate()
+report("grouped friend's class read", state.hasWarlock and not state.needWarlock)
+ns.settings.roles.DAMAGER.need = 2
+Finder.Evaluate()
+report("no seat kept once a warlock is grouped", find("Big Rogue").status == "match")
+ns.UI.Refresh()
+report("group line says Warlock: yes", findFrame(function(f) return type(f.text) == "string" and f.text:find("Warlock: yes", 1, true) end) ~= nil)
+M.party = {}
+M.Fire("GROUP_ROSTER_UPDATE")
+-- You being a Warlock counts too.
+M.myClass = "WARLOCK"
+report("you count as the warlock", Finder.Evaluate().hasWarlock)
+M.myClass = "MAGE"
+-- Off: nothing kept.
+lockBox.checked = false
+lockBox.scripts.OnClick(lockBox)
+ns.settings.roles.DAMAGER.need = 1
+Finder.Evaluate()
+report("checkbox off: no seat kept", ns.settings.needWarlock == false and find("Big Rogue").status == "match")
+ns.settings.roles.TANK.need, ns.settings.roles.HEALER.need, ns.settings.roles.DAMAGER.need = 1, 1, 3
+wipe(Inviter.pending)
+EasyLFGFrame:Hide()
+report("no errors after warlock tests", ns.lastError == nil, ns.lastError)
+
 out(("%d passed, %d failed"):format(passed, failed))
 if failed > 0 then
 	for i = math.max(1, #M.prints - 12), #M.prints do out("  chat: " .. tostring(M.prints[i])) end

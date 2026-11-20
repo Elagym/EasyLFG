@@ -72,6 +72,7 @@ local DEFAULT_SETTINGS = {
 		DAMAGER = { need = 3, minLevel = 1, maxLevel = 60, classes = classSet(ns.CLASSES) },
 	},
 	distinctClasses = false,
+	needWarlock = false, -- at least one Warlock in the group, as DPS
 	whisper = true,
 	message = ns.DEFAULT_MESSAGE,
 	timeout = 90, -- seconds before an invite without any answer is given up
@@ -501,6 +502,9 @@ function ns.InitDB()
 		end
 		settings.roles[role].need = ns.Clamp(settings.roles[role].need, 0, ns.MAX_PARTY)
 		settings.roles[role].minLevel = ns.Clamp(settings.roles[role].minLevel, 1, ns.MAX_LEVEL)
+		if role == "DAMAGER" and settings.needWarlock then
+			settings.roles[role].classes.WARLOCK = true -- the Warlock you want must be allowed as DPS
+		end
 		settings.roles[role].maxLevel = ns.Clamp(settings.roles[role].maxLevel or ns.MAX_LEVEL, 1, ns.MAX_LEVEL)
 		if settings.roles[role].maxLevel < settings.roles[role].minLevel then
 			settings.roles[role].maxLevel = ns.MAX_LEVEL

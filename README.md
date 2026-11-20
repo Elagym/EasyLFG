@@ -11,6 +11,10 @@ An addon for **World of Warcraft Forever** that builds your dungeon group from t
   - the **minimum and maximum level** (Min lvl / Max lvl). Picking a dungeon sets the min to the bottom of its level range, as shown in the dungeon menu, and the max to the top of that range + 2 (a 15-25 dungeon gives a max of 27). A dungeon with no known top level sets the max to 60, which means no limit. You can change them after. If you type a min above the max or a max below the min, the other one follows,
   - the **classes** you accept. Each role only offers the classes able to play it: Warrior, Paladin and Druid for tanks; Paladin, Priest, Shaman and Druid for healers; every class for DPS.
 - Optionally ask for **distinct classes only**.
+- Optionally ask for **at least 1 Warlock** (as DPS). A Warlock already in your group counts, whether that's you, a friend you grouped with before, or someone who joined. Without one:
+  - a Warlock is invited first among the DPS, whatever their level;
+  - the last open DPS seat waits for a Warlock, with the reason "last DPS seat kept for a Warlock" on the other DPS;
+  - the group line shows "Warlock: needed" or "Warlock: yes", and the Group panel shows "Warlock wanted" for that seat.
 - EasyLFG only searches, and only reads, the listings for the dungeon you picked. Without a dungeon, it does neither.
 - It reads the players who listed themselves alone for that dungeon. For each open role it picks the best match: highest level first, then the one listed longest.
 - **One invite at a time.** The next invite only goes out after an answer: joined, declined, already in a group, not found, or no answer in time.

@@ -297,6 +297,9 @@ function Finder.GroupState()
 	state.full = state.free == 0
 	state.complete = complete
 	state.done = complete or state.full
+	-- "At least 1 Warlock": you, a friend already grouped, a joiner or an invite waiting counts.
+	state.hasWarlock = state.classes.WARLOCK == true
+	state.needWarlock = s.needWarlock == true and not state.hasWarlock and (s.roles.DAMAGER.need or 0) > 0
 	return state
 end
 
@@ -466,6 +469,8 @@ function Finder.Judge(c, state)
 				text = ("level %d, %s needs %d"):format(c.level, label, rule.minLevel)
 			elseif c.level > (rule.maxLevel or ns.MAX_LEVEL) then
 				text = ("level %d, %s max %d"):format(c.level, label, rule.maxLevel)
+			elseif role == "DAMAGER" and state.needWarlock and c.class ~= "WARLOCK" and state.remaining.DAMAGER <= 1 then
+				text = "last DPS seat kept for a Warlock"
 			elseif s.distinctClasses and state.classes[c.class] then
 				text = ("%s already in the group"):format(ns.ClassName(c.class))
 			end
@@ -573,16 +578,28 @@ end
 
 -- The best candidate for one role right now, or nil: highest level, then longest listed.
 function Finder.BestFor(role)
-	Finder.Evaluate()
+	local state = Finder.Evaluate()
+	-- A Warlock is wanted and none is in the group: one goes first among the DPS.
+	local warlockOnly = role == "DAMAGER" and state.needWarlock and Finder.HasMatch(role, "WARLOCK")
 	local best
 	for _, c in ipairs(Finder.candidates) do
-		if c.status == "match" and c.fits[role] then
+		if c.status == "match" and c.fits[role] and (not warlockOnly or c.class == "WARLOCK") then
 			if not best or c.level > best.level or (c.level == best.level and c.age > best.age) then
 				best = c
 			end
 		end
 	end
 	return best
+end
+
+-- Is anyone of this class a match for this role right now?
+function Finder.HasMatch(role, class)
+	for _, c in ipairs(Finder.candidates) do
+		if c.status == "match" and c.fits[role] and c.class == class then
+			return true
+		end
+	end
+	return false
 end
 
 function Finder.FindCandidate(name)

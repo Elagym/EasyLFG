@@ -374,12 +374,42 @@ local function buildSettings()
 	end
 
 	y = -186
-	widgets.distinct = newCheck(frame, "Distinct classes only (no two players of the same class)")
+	widgets.distinct = newCheck(frame, "Distinct classes only")
 	widgets.distinct:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, y)
 	widgets.distinct:SetScript("OnClick", function(self)
 		ns.settings.distinctClasses = self:GetChecked() and true or false
 		ns.Finder.Evaluate()
 		ns.Refresh()
+	end)
+	widgets.distinct:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine("No two players of the same class, you and your group included.", 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	widgets.distinct:SetScript("OnLeave", function()
+		GameTooltip:Hide()
+	end)
+
+	widgets.warlock = newCheck(frame, "At least 1 Warlock (DPS)")
+	widgets.warlock:SetPoint("TOPLEFT", frame, "TOPLEFT", 230, y)
+	widgets.warlock:SetScript("OnClick", function(self)
+		local s = ns.settings
+		s.needWarlock = self:GetChecked() and true or false
+		if s.needWarlock then
+			s.roles.DAMAGER.classes.WARLOCK = true
+		end
+		ns.Log("At least 1 Warlock: " .. (s.needWarlock and "on" or "off"))
+		ns.Finder.Evaluate()
+		ns.Refresh()
+	end)
+	widgets.warlock:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine("Keep a DPS seat for a Warlock.", 1, 1, 1, true)
+		GameTooltip:AddLine("A Warlock already in your group counts, you or a friend. Otherwise a Warlock is invited first among the DPS, and the last DPS seat waits for one.", 0.8, 0.8, 0.8, true)
+		GameTooltip:Show()
+	end)
+	widgets.warlock:SetScript("OnLeave", function()
+		GameTooltip:Hide()
 	end)
 
 	y = -214
@@ -784,6 +814,9 @@ local function refreshGroup()
 	if state.unknownRoles > 0 then
 		text = text .. ("  |cff888888(%d unknown = DPS)|r"):format(state.unknownRoles)
 	end
+	if ns.settings.needWarlock then
+		text = text .. (state.hasWarlock and "  |cff60ff60Warlock: yes|r" or "  |cffff9933Warlock: needed|r")
+	end
 	widgets.group:SetText(text)
 end
 
@@ -808,7 +841,8 @@ function UI.GroupSlots(state)
 		list[#list + 1] = { role = role, name = invite.name, class = invite.class, kind = "invited",
 			left = math.max(0, limit - math.floor(GetTime() - invite.sentAt)) }
 	end
-	-- Open seats, as many as still wanted and as the group has room for.
+	-- Open seats, as many as still wanted and as the group has room for. With no Warlock yet, the
+	-- last open DPS seat is the Warlock's.
 	local free = state.free
 	for _, role in ipairs(ns.ROLES) do
 		for _ = 1, state.remaining[role] do
@@ -818,6 +852,15 @@ function UI.GroupSlots(state)
 			free = free - 1
 			local list = byRole[role]
 			list[#list + 1] = { role = role, kind = "open" }
+		end
+	end
+	if state.needWarlock then
+		local dps = byRole.DAMAGER
+		for index = #dps, 1, -1 do
+			if dps[index].kind == "open" then
+				dps[index].warlock = true
+				break
+			end
 		end
 	end
 	local slots = {}
@@ -850,7 +893,7 @@ function UI.RefreshParty()
 			if slot.kind == "open" then
 				row.role:SetText(icon)
 				row.role:SetAlpha(0.4)
-				row.name:SetText(("|cff707070%s wanted|r"):format(ns.ROLE_LABEL[slot.role]))
+				row.name:SetText(("|cff707070%s wanted|r"):format(slot.warlock and "Warlock" or ns.ROLE_LABEL[slot.role]))
 			else
 				row.role:SetText(icon)
 				row.role:SetAlpha(1)
@@ -953,6 +996,7 @@ function UI.Refresh()
 		widgets.timeout:load()
 	end
 	widgets.distinct:SetChecked(s.distinctClasses == true)
+	widgets.warlock:SetChecked(s.needWarlock == true)
 	widgets.whisper:SetChecked(s.whisper == true)
 	if not widgets.message:HasFocus() then
 		widgets.message:SetText(s.message or "")

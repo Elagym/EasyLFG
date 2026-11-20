@@ -319,8 +319,9 @@ function Inviter.RulesText()
 			or ("%d+"):format(rule.minLevel)
 		parts[#parts + 1] = ("%s %d (%s, %s)"):format(ns.ROLE_LABEL[role], rule.need, levels, classText)
 	end
-	return ("Rules for %s: %s; distinct classes %s; you are %s"):format(s.activityName or "?",
-		table.concat(parts, ", "), s.distinctClasses and "on" or "off", ns.ROLE_LABEL[s.myRole] or "?")
+	return ("Rules for %s: %s; distinct classes %s%s; you are %s"):format(s.activityName or "?",
+		table.concat(parts, ", "), s.distinctClasses and "on" or "off", s.needWarlock and "; at least 1 Warlock" or "",
+		ns.ROLE_LABEL[s.myRole] or "?")
 end
 
 -- The group is complete (or full): say so once, stop auto mode, and run the one role check, so
